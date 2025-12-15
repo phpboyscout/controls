@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"context"
 	"sync"
 )
 
@@ -16,7 +17,7 @@ func (q *Services) add(s Service) {
 	q.services = append(q.services, s)
 }
 
-func (q *Services) start(errChan chan error) {
+func (q *Services) start(ctx context.Context, errChan chan error) {
 	q.mu.Lock()
 
 	wg := &sync.WaitGroup{}
@@ -24,7 +25,7 @@ func (q *Services) start(errChan chan error) {
 		wg.Add(1)
 
 		go func(fn StartFunc, errs chan error) {
-			err := fn()
+			err := fn(ctx)
 			if err != nil {
 				errs <- err
 			}
@@ -37,12 +38,12 @@ func (q *Services) start(errChan chan error) {
 	wg.Wait()
 }
 
-func (q *Services) stop() int {
+func (q *Services) stop(ctx context.Context) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	for _, s := range q.services {
-		s.Stop()
+		s.Stop(ctx)
 	}
 
 	return len(q.services)

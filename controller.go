@@ -8,19 +8,23 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
+const DefaultShutdownTimeout = 5 * time.Second
+
 type Controller struct {
-	ctx        context.Context
-	logger     *slog.Logger
-	messages   chan Message
-	health     chan HealthMessage
-	errs       chan error
-	signals    chan os.Signal
-	wg         *sync.WaitGroup
-	state      State
-	stateMutex sync.Mutex
-	services   Services
+	ctx             context.Context
+	logger          *slog.Logger
+	messages        chan Message
+	health          chan HealthMessage
+	errs            chan error
+	signals         chan os.Signal
+	wg              *sync.WaitGroup
+	shutdownTimeout time.Duration
+	state           State
+	stateMutex      sync.Mutex
+	services        Services
 }
 
 func (c *Controller) GetContext() context.Context {
@@ -67,6 +71,10 @@ func (c *Controller) SetWaitGroup(wg *sync.WaitGroup) {
 	c.wg = wg
 }
 
+func (c *Controller) SetShutdownTimeout(d time.Duration) {
+	c.shutdownTimeout = d
+}
+
 func (c *Controller) SetState(state State) {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
@@ -101,13 +109,16 @@ func (c *Controller) IsStopping() bool {
 	return c.GetState() == Stopping
 }
 
-func (c *Controller) Register(id string, start StartFunc, stop StopFunc, status StatusFunc) {
-	c.services.add(Service{
-		Name:   id,
-		Start:  start,
-		Stop:   stop,
-		Status: status,
-	})
+func (c *Controller) Register(id string, opts ...ServiceOption) {
+	s := Service{
+		Name: id,
+	}
+
+	for _, opt := range opts {
+		opt(&s)
+	}
+
+	c.services.add(s)
 }
 
 func (c *Controller) Start() {
@@ -115,7 +126,7 @@ func (c *Controller) Start() {
 
 	adding := len(c.services.services)
 	c.wg.Add(adding)
-	c.services.start(c.errs)
+	c.services.start(c.ctx, c.errs)
 	c.SetState(Running)
 }
 
@@ -189,7 +200,10 @@ func (c *Controller) handleStopMessage() {
 	}
 
 	if c.IsStopping() {
-		stopping := 0 - c.services.stop()
+		ctx, cancel := context.WithTimeout(context.Background(), c.shutdownTimeout)
+		defer cancel()
+
+		stopping := 0 - c.services.stop(ctx)
 		c.wg.Add(stopping)
 		c.SetState(Stopped)
 		c.logger.Info("Stopped")
@@ -204,6 +218,13 @@ func WithoutSignals() ControllerOpt {
 	}
 }
 
+func WithShutdownTimeout(d time.Duration) ControllerOpt {
+	return func(c Controllable) {
+		c.SetShutdownTimeout(d)
+	}
+}
+
+// Global Options.
 func WithLogger(logger *slog.Logger) ControllerOpt {
 	return func(c Controllable) {
 		c.SetLogger(logger)
@@ -212,14 +233,15 @@ func WithLogger(logger *slog.Logger) ControllerOpt {
 
 func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 	c := &Controller{
-		ctx:      ctx,
-		logger:   slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		messages: make(chan Message),
-		health:   make(chan HealthMessage),
-		errs:     make(chan error),
-		wg:       &sync.WaitGroup{},
-		state:    Unknown,
-		services: Services{},
+		ctx:             ctx,
+		logger:          slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		messages:        make(chan Message),
+		health:          make(chan HealthMessage),
+		errs:            make(chan error),
+		wg:              &sync.WaitGroup{},
+		shutdownTimeout: DefaultShutdownTimeout,
+		state:           Unknown,
+		services:        Services{},
 	}
 
 	c.SetSignalsChannel(make(chan os.Signal, 1))

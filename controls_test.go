@@ -23,15 +23,19 @@ type StateCounters struct {
 
 func getNewController(ctx context.Context) (*controls.Controller, *StateCounters, *bytes.Buffer) {
 	cntrs := &StateCounters{}
-	startFunc := func() error { cntrs.Started.Add(1); return nil }
-	stopFunc := func() { cntrs.Stopped.Add(1) }
+	startFunc := func(_ context.Context) error { cntrs.Started.Add(1); return nil }
+	stopFunc := func(_ context.Context) { cntrs.Stopped.Add(1) }
 	statusFunc := func() { cntrs.Statused.Add(1); time.Sleep(500 * time.Microsecond) }
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	c := controls.NewController(ctx, controls.WithLogger(logger))
-	c.Register("test", startFunc, stopFunc, statusFunc)
+	c.Register("test",
+		controls.WithStart(startFunc),
+		controls.WithStop(stopFunc),
+		controls.WithStatus(statusFunc),
+	)
 
 	return c, cntrs, &buf
 }
@@ -78,7 +82,9 @@ func TestController_Controls(t *testing.T) {
 		assert.True(t, c.IsRunning())
 		c.Messages() <- controls.Stop
 
-		assert.Equal(t, int64(1), cntrs.Stopped.Load())
+		assert.Eventually(t, func() bool {
+			return cntrs.Stopped.Load() == int64(1)
+		}, 1*time.Second, 10*time.Millisecond)
 		assert.True(t, c.IsStopped())
 	})
 
@@ -86,9 +92,13 @@ func TestController_Controls(t *testing.T) {
 
 func TestController_StartError(t *testing.T) {
 	c, _, output := getNewController(context.Background())
-	c.Register("test", func() error {
-		return fmt.Errorf("test error")
-	}, func() {}, func() {})
+	c.Register("test",
+		controls.WithStart(func(_ context.Context) error {
+			return fmt.Errorf("test error")
+		}),
+		controls.WithStop(func(_ context.Context) {}),
+		controls.WithStatus(func() {}),
+	)
 
 	c.Start()
 

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 )
 
 const (
@@ -21,10 +22,29 @@ const (
 
 type State string
 type Message string
-type StartFunc func() error
-type StopFunc func()
+type StartFunc func(context.Context) error
+type StopFunc func(context.Context)
 type StatusFunc func()
 type ValidErrorFunc func(error) bool
+type ServiceOption func(*Service)
+
+func WithStart(fn StartFunc) ServiceOption {
+	return func(s *Service) {
+		s.Start = fn
+	}
+}
+
+func WithStop(fn StopFunc) ServiceOption {
+	return func(s *Service) {
+		s.Stop = fn
+	}
+}
+
+func WithStatus(fn StatusFunc) ServiceOption {
+	return func(s *Service) {
+		s.Status = fn
+	}
+}
 
 type HealthMessage struct {
 	Host    string `json:"host"`
@@ -43,6 +63,7 @@ type Controllable interface {
 	SetSignalsChannel(sigs chan os.Signal)
 	SetHealthChannel(health chan HealthMessage)
 	SetWaitGroup(wg *sync.WaitGroup)
+	SetShutdownTimeout(d time.Duration)
 	Start()
 	Stop()
 	GetContext() context.Context
@@ -53,5 +74,5 @@ type Controllable interface {
 	IsRunning() bool
 	IsStopped() bool
 	IsStopping() bool
-	Register(id string, start StartFunc, stop StopFunc, status StatusFunc)
+	Register(id string, opts ...ServiceOption)
 }
