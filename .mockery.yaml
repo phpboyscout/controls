@@ -1,0 +1,6 @@
+all: true
+packages:
+  github.com/phpboyscout/controls:
+    config:
+       inpackage: true
+       filename: "{{.InterfaceName | lower}}_mock_test.go"

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	mock "github.com/stretchr/testify/mock"
 )
@@ -447,8 +448,13 @@ func (_c *MockControllable_Messages_Call) RunAndReturn(run func() chan Message) 
 }
 
 // Register provides a mock function for the type MockControllable
-func (_mock *MockControllable) Register(id string, start StartFunc, stop StopFunc, status StatusFunc) {
-	_mock.Called(id, start, stop, status)
+func (_mock *MockControllable) Register(id string, opts ...ServiceOption) {
+	if len(opts) > 0 {
+		_mock.Called(id, opts)
+	} else {
+		_mock.Called(id)
+	}
+
 	return
 }
 
@@ -459,36 +465,27 @@ type MockControllable_Register_Call struct {
 
 // Register is a helper method to define mock.On call
 //   - id string
-//   - start StartFunc
-//   - stop StopFunc
-//   - status StatusFunc
-func (_e *MockControllable_Expecter) Register(id interface{}, start interface{}, stop interface{}, status interface{}) *MockControllable_Register_Call {
-	return &MockControllable_Register_Call{Call: _e.mock.On("Register", id, start, stop, status)}
+//   - opts ...ServiceOption
+func (_e *MockControllable_Expecter) Register(id interface{}, opts ...interface{}) *MockControllable_Register_Call {
+	return &MockControllable_Register_Call{Call: _e.mock.On("Register",
+		append([]interface{}{id}, opts...)...)}
 }
 
-func (_c *MockControllable_Register_Call) Run(run func(id string, start StartFunc, stop StopFunc, status StatusFunc)) *MockControllable_Register_Call {
+func (_c *MockControllable_Register_Call) Run(run func(id string, opts ...ServiceOption)) *MockControllable_Register_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 StartFunc
-		if args[1] != nil {
-			arg1 = args[1].(StartFunc)
+		var arg1 []ServiceOption
+		var variadicArgs []ServiceOption
+		if len(args) > 1 {
+			variadicArgs = args[1].([]ServiceOption)
 		}
-		var arg2 StopFunc
-		if args[2] != nil {
-			arg2 = args[2].(StopFunc)
-		}
-		var arg3 StatusFunc
-		if args[3] != nil {
-			arg3 = args[3].(StatusFunc)
-		}
+		arg1 = variadicArgs
 		run(
 			arg0,
-			arg1,
-			arg2,
-			arg3,
+			arg1...,
 		)
 	})
 	return _c
@@ -499,7 +496,7 @@ func (_c *MockControllable_Register_Call) Return() *MockControllable_Register_Ca
 	return _c
 }
 
-func (_c *MockControllable_Register_Call) RunAndReturn(run func(id string, start StartFunc, stop StopFunc, status StatusFunc)) *MockControllable_Register_Call {
+func (_c *MockControllable_Register_Call) RunAndReturn(run func(id string, opts ...ServiceOption)) *MockControllable_Register_Call {
 	_c.Run(run)
 	return _c
 }
@@ -660,6 +657,46 @@ func (_c *MockControllable_SetMessageChannel_Call) Return() *MockControllable_Se
 }
 
 func (_c *MockControllable_SetMessageChannel_Call) RunAndReturn(run func(control chan Message)) *MockControllable_SetMessageChannel_Call {
+	_c.Run(run)
+	return _c
+}
+
+// SetShutdownTimeout provides a mock function for the type MockControllable
+func (_mock *MockControllable) SetShutdownTimeout(d time.Duration) {
+	_mock.Called(d)
+	return
+}
+
+// MockControllable_SetShutdownTimeout_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetShutdownTimeout'
+type MockControllable_SetShutdownTimeout_Call struct {
+	*mock.Call
+}
+
+// SetShutdownTimeout is a helper method to define mock.On call
+//   - d time.Duration
+func (_e *MockControllable_Expecter) SetShutdownTimeout(d interface{}) *MockControllable_SetShutdownTimeout_Call {
+	return &MockControllable_SetShutdownTimeout_Call{Call: _e.mock.On("SetShutdownTimeout", d)}
+}
+
+func (_c *MockControllable_SetShutdownTimeout_Call) Run(run func(d time.Duration)) *MockControllable_SetShutdownTimeout_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 time.Duration
+		if args[0] != nil {
+			arg0 = args[0].(time.Duration)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControllable_SetShutdownTimeout_Call) Return() *MockControllable_SetShutdownTimeout_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockControllable_SetShutdownTimeout_Call) RunAndReturn(run func(d time.Duration)) *MockControllable_SetShutdownTimeout_Call {
 	_c.Run(run)
 	return _c
 }
