@@ -102,6 +102,9 @@ func TestController_StartError(t *testing.T) {
 
 	c.Start()
 
+	// Give the goroutine time to process the error
+	time.Sleep(10 * time.Millisecond)
+
 	assert.Contains(t, output.String(), "test error")
 }
 
