@@ -269,7 +269,7 @@ func registerHTTPServer(controller *controls.Controller, props *props.Props) {
         props.Logger.Info("Starting HTTP server", "addr", server.Addr)
         err := server.ListenAndServe()
         if err != nil && err != http.ErrServerClosed {
-            return errors.WrapPrefix(err, "HTTP server failed", 0)
+            return errors.Wrap(err, "HTTP server failed")
         }
         return nil
     }
@@ -321,7 +321,7 @@ func registerBackgroundWorker(controller *controls.Controller, props *props.Prop
                     // Perform background work
                     err := doBackgroundWork(props)
                     if err != nil {
-                        controller.Errors() <- errors.WrapPrefix(err, "background work failed", 0)
+                        controller.Errors() <- errors.Wrap(err, "background work failed")
                     }
                 }
             }
@@ -635,7 +635,7 @@ func createDatabaseService(controller *controls.Controller) (StartFunc, StopFunc
         var err error
         db, err = sql.Open("postgres", connectionString)
         if err != nil {
-            return errors.WrapPrefix(err, "failed to open database", 0)
+            return errors.Wrap(err, "failed to open database")
         }
 
         // Test the connection
@@ -643,7 +643,7 @@ func createDatabaseService(controller *controls.Controller) (StartFunc, StopFunc
         defer cancel()
 
         if err := db.PingContext(ctx); err != nil {
-            return errors.WrapPrefix(err, "database ping failed", 0)
+            return errors.Wrap(err, "database ping failed")
         }
 
         return nil
@@ -690,7 +690,7 @@ func createDatabaseService(controller *controls.Controller) (StartFunc, StopFunc
 - Use the shared error channel for all service errors
 - Implement error categorization (critical vs non-critical)
 - Consider implementing retry logic for transient errors
-- Always wrap errors with context using the go-errors package
+- Always wrap errors with context using the cockroachdb/errors package
 
 ### 4. Graceful Shutdown
 
