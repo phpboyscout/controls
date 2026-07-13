@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.1.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.1)
+
+### Bug Fixes
+
+- guard workflow dedup rule so release tag pipelines fire
+
 ## [v0.1.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.0)
 
 ### Features
