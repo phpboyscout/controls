@@ -1,0 +1,109 @@
+version: "2"
+run:
+  modules-download-mode: mod
+  issues-exit-code: 1
+  tests: true
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - cyclop
+    - dupl
+    - durationcheck
+    - err113
+    - errcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gocritic
+    - godot
+    - gosec
+    - gosmopolitan
+    - loggercheck
+    - makezero
+    - mnd
+    - musttag
+    - nestif
+    - nilerr
+    - nilnesserr
+    - nlreturn
+    - noctx
+    - prealloc
+    - protogetter
+    - reassign
+    - recvcheck
+    - revive
+    - rowserrcheck
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - testifylint
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+    - wsl_v5
+    - zerologlint
+  disable:
+    - perfsprint
+    - wrapcheck
+    - wsl
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    gosmopolitan:
+      allow-time-local: true
+    revive:
+      rules:
+        - name: unused-parameter
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    rules:
+      - path: _test\.go
+        linters:
+          - wsl_v5
+          - nlreturn
+          - whitespace
+          - godot
+          - err113
+          - noctx
+          - prealloc
+          - unparam
+          - mnd
+          - dupl
+      - path: _test\.go
+        text: "G102|G112|G306"
+        linters:
+          - gosec
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - gitlab.com/phpboyscout/go/controls
+    gofumpt:
+      module-path: gitlab.com/phpboyscout/go/controls
+      extra-rules: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,0 +1,50 @@
+# .gitlab-ci.yml — pipeline assembled from phpboyscout/cicd components.
+#
+#   merge_request_event → lint, test, security   (the merge gate)
+#   default branch      → releaser-pleaser, zensical-pages deploy
+#   tag v*.*.*          → zensical-pages docs for the release
+#   schedule            → renovate
+#
+# This is a library (no binaries), so there is no goreleaser component and no
+# release-asset signing — module integrity is provided by go.sum + the Go
+# checksum database. See the design spec in go-tool-base
+# (docs/development/specs/2026-07-05-chat-module-extraction.md).
+
+include:
+  - component: gitlab.com/phpboyscout/cicd/go-lint@v0.22.0
+  - component: gitlab.com/phpboyscout/cicd/go-test@v0.22.0
+    inputs:
+      enable_e2e: false
+  - component: gitlab.com/phpboyscout/cicd/go-security@v0.22.0
+  - component: gitlab.com/phpboyscout/cicd/releaser-pleaser@v0.22.0
+    inputs:
+      token: $RELEASER_PLEASER_TOKEN
+      branch: main
+      stage: release
+  - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.22.0
+  - component: gitlab.com/phpboyscout/cicd/renovate-self@v0.22.0
+    inputs:
+      repositories: '["phpboyscout/go/controls"]'
+
+stages:
+  - lint
+  - test
+  - security
+  - release
+  - pages
+  - renovate
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
+      when: never
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+variables:
+  GIT_DEPTH: "0"
+
+default:
+  tags: [saas-linux-medium-amd64]
