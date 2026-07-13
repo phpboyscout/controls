@@ -1,0 +1,89 @@
+# Curated navigation, ordered by the Diátaxis quadrants (tutorial → how-to →
+# explanation → reference). Without this, the sidebar auto-generates
+# alphabetically; the order below is pedagogical.
+nav = [
+  { Home = "index.md" },
+  { Tutorial = [ { "Getting started" = "getting-started.md" } ] },
+  { "How-to guides" = [ { "Register & run services" = "how-to/register-services.md" }, { "Add health checks" = "how-to/health-checks.md" }, { "Configure restart policy" = "how-to/restart-policy.md" }, { "Handle graceful shutdown & signals" = "how-to/graceful-shutdown.md" } ] },
+  { Explanation = [ { "Architecture & the lifecycle state machine" = "explanation/architecture.md" }, { "Health, liveness & readiness" = "explanation/health-model.md" }, { "The restart supervisor" = "explanation/restart-supervisor.md" }, { "Concurrency & shutdown correctness" = "explanation/concurrency.md" } ] },
+  { "Reference (pkg.go.dev)" = "https://pkg.go.dev/gitlab.com/phpboyscout/go/controls" },
+]
+
+[project]
+site_name = "controls"
+site_description = "Service-lifecycle supervisor for Go — startup ordering, health probes, graceful shutdown, self-healing restarts"
+site_author = "Matt Cockayne"
+site_url = "https://controls.go.phpboyscout.uk"
+repo_url = "https://gitlab.com/phpboyscout/go/controls"
+repo_name = "phpboyscout/go/controls"
+copyright = "Copyright &copy; 2026 Matt Cockayne"
+
+[project.theme]
+logo = "images/branding/logo_transparent.svg"
+favicon = "images/branding/favicon.svg"
+language = "en"
+features = [
+    "content.action.view",
+    "content.code.annotate",
+    "content.code.copy",
+    "content.code.select",
+    "content.tabs.link",
+    "content.tooltips",
+    "navigation.footer",
+    "navigation.indexes",
+    "navigation.instant",
+    "navigation.instant.prefetch",
+    "navigation.instant.progress",
+    "navigation.path",
+    "navigation.sections",
+    "navigation.tabs",
+    "navigation.tabs.sticky",
+    "navigation.top",
+    "navigation.tracking",
+    "search.highlight",
+    "toc.follow",
+]
+
+[project.theme.font]
+text = "Inter"
+code = "Jetbrains Mono"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/gitlab"
+link = "https://gitlab.com/phpboyscout/go/controls"
+
+[[project.extra.social]]
+icon = "fontawesome/solid/globe"
+link = "https://phpboyscout.uk"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/instagram"
+link = "https://instagram.com/matt.cockayne"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/tiktok"
+link = "https://tiktok.com/@phpboyscout"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/youtube"
+link = "https://youtube.com/@phpboyscout"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/linkedin"
+link = "https://linkedin.com/in/matthewcockayne"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/discord"
+link = "https://discord.gg/3DM8G9wFq"
