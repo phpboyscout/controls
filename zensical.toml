@@ -4,7 +4,7 @@
 nav = [
   { Home = "index.md" },
   { Tutorial = [ { "Getting started" = "getting-started.md" } ] },
-  { "How-to guides" = [ { "Register & run services" = "how-to/register-services.md" }, { "Add health checks" = "how-to/health-checks.md" }, { "Configure restart policy" = "how-to/restart-policy.md" }, { "Handle graceful shutdown & signals" = "how-to/graceful-shutdown.md" } ] },
+  { "How-to guides" = [ { "Register & run services" = "how-to/register-services.md" }, { "Add health checks" = "how-to/health-checks.md" }, { "Configure restart policy" = "how-to/restart-policy.md" }, { "Handle graceful shutdown & signals" = "how-to/graceful-shutdown.md" }, { "Test services & mock the controller" = "how-to/testing.md" } ] },
   { Explanation = [ { "Architecture & the lifecycle state machine" = "explanation/architecture.md" }, { "Health, liveness & readiness" = "explanation/health-model.md" }, { "The restart supervisor" = "explanation/restart-supervisor.md" }, { "Concurrency & shutdown correctness" = "explanation/concurrency.md" } ] },
   { "Reference (pkg.go.dev)" = "https://pkg.go.dev/gitlab.com/phpboyscout/go/controls" },
 ]
