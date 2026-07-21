@@ -45,6 +45,3 @@ workflow:
 
 variables:
   GIT_DEPTH: "0"
-
-default:
-  tags: [saas-linux-medium-amd64]
