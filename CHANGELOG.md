@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.1.2](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.2)
+
+### Bug Fixes
+
+- **deps**: bump golang.org/x/text to v0.40.0
+
 ## [v0.1.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.1)
 
 ### Bug Fixes
