@@ -22,9 +22,6 @@ include:
       branch: main
       stage: release
   - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.27.0
-  - component: gitlab.com/phpboyscout/cicd/renovate-self@v0.27.0
-    inputs:
-      repositories: '["phpboyscout/go/controls"]'
 
 stages:
   - lint
