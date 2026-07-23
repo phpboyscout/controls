@@ -39,19 +39,57 @@ after the first receipt, which disables that `select` case for good. The
 goroutine then idles until `shutdownComplete` closes, draining any buffered
 errors before it exits.
 
-## Bounded shutdown — Wait can never hang
+## Bounded shutdown — what the bound covers
 
 `Wait` blocks on a wait group sized to *services + 1*. The extra "+1" is the
 controller's own lifecycle count, released **last** — only after the shutdown
 handler has run every stop callback and set the `Stopped` state. So `Wait`
 returning is a hard guarantee that shutdown finished.
 
-Crucially, that guarantee holds even if a `WithStop` misbehaves. Each stop runs
-in its own goroutine and is awaited against the shutdown-timeout deadline; a stop
-that ignores its context is **abandoned** when the deadline elapses and the
-sequence moves on. The abandoned goroutine is left to finish on its own, but it
-can no longer hold up shutdown — so `Wait` returns within roughly the shutdown
-timeout regardless of a stuck service.
+That guarantee holds even if a `WithStop` misbehaves. Each stop runs in its own
+goroutine and is awaited against the shutdown-timeout deadline; a stop that
+ignores its context is **abandoned** when the deadline elapses and the sequence
+moves on. The abandoned goroutine is left to finish on its own, but it can no
+longer hold up shutdown — so with context-respecting `WithStart` callbacks,
+`Wait` returns within roughly the shutdown timeout regardless of a stuck stop.
+
+The bound covers the **shutdown sequence**, not a `WithStart` that never
+returns. A start callback that ignores cancellation keeps its per-service wait
+group count held forever, and the bare `Wait` — which promises to see every
+service unwind — blocks with it. That case is covered by `WaitContext` and the
+post-stop supervisor wait, described in D10 below.
+
+## D10 — bounding the wait against context-ignoring StartFuncs
+
+A `WithStart` that ignores `ctx.Done()` — canonically a wrapper around a
+third-party blocking `Run()` with no cancellation support, whose `WithStop`
+cannot unblock it — never returns, so its supervisor goroutine never exits and
+the wait group never drains. The shutdown sequence itself completes (services
+stopped or abandoned on deadline, state `Stopped`), and then a bare `Wait`
+hangs forever on a controller that reports itself stopped.
+
+The wait group cannot be force-drained on the stuck supervisor's behalf:
+calling `wg.Done()` for it would race a late-returning `Start` into a
+double-decrement panic. The controller instead applies the same
+abandon-at-deadline policy the stop path already uses for context-ignoring
+`WithStop` callbacks, at two points:
+
+- **Inside shutdown**, after the stop callbacks have run, the shutdown handler
+  waits for every supervisor to exit against the *remaining* shutdown-timeout
+  budget — one deadline covers the whole bounded-shutdown contract. Any
+  supervisor still running at the deadline is abandoned, and its service is
+  named in a WARN record — turning a silent hang into a diagnosable message.
+- **At the caller**, `WaitContext(ctx)` selects between the wait-group drain
+  and `ctx.Done()`: `nil` on a clean drain, `ctx.Err()` when the wait is
+  abandoned. `Wait` keeps its unbounded behaviour for callers with
+  context-respecting services who want the guaranteed-cleanup semantics.
+
+On either abandon path the stuck supervisor (and the small helper goroutine
+watching the undrainable wait group) are **deliberately leaked** — the
+identical, documented tradeoff already accepted for abandoned stop callbacks.
+The goroutine-leak guard tests account for this: the stuck-StartFunc tests
+bound their deliberate leak by releasing the blocked start at test cleanup, so
+no other test's goroutine baseline is skewed.
 
 ## D8 — startup ordering: health-check setup happens-before the control goroutines
 

@@ -47,6 +47,17 @@ type Services struct {
 	services   []Service
 	info       sync.Map // map[string]ServiceInfo
 	validError ValidErrorFunc
+	// exits pairs each launched supervisor goroutine with the channel closed
+	// when it returns, so the shutdown sequence can bound its wait for
+	// supervisor exit and name any service whose StartFunc never returned (D10).
+	exits []supervisorExit
+}
+
+// supervisorExit records the exit channel for a single supervisor goroutine.
+// The channel is closed when the goroutine returns.
+type supervisorExit struct {
+	name   string
+	exited chan struct{}
 }
 
 func (q *Services) add(s Service) {
@@ -145,8 +156,48 @@ func (q *Services) start(ctx context.Context, wg *sync.WaitGroup, errChan chan e
 	defer q.mu.Unlock()
 
 	for _, s := range q.services {
-		go q.supervise(ctx, s, errChan, wg, done)
+		exited := make(chan struct{})
+		q.exits = append(q.exits, supervisorExit{name: s.Name, exited: exited})
+
+		go func(s Service, exited chan struct{}) {
+			defer close(exited)
+
+			q.supervise(ctx, s, errChan, wg, done)
+		}(s, exited)
 	}
+}
+
+// awaitSupervisors blocks until every supervisor goroutine has exited or ctx is
+// done, whichever comes first. It returns the names of services whose
+// supervisors had not exited by the deadline — i.e. whose StartFuncs ignored
+// cancellation. The stuck goroutines are abandoned rather than force-drained:
+// decrementing the wait group on their behalf would race a late-returning
+// Start into a double-decrement panic (D10).
+func (q *Services) awaitSupervisors(ctx context.Context) []string {
+	q.mu.Lock()
+	exits := make([]supervisorExit, len(q.exits))
+	copy(exits, q.exits)
+	q.mu.Unlock()
+
+	var stuck []string
+
+	for _, e := range exits {
+		select {
+		case <-e.exited:
+		case <-ctx.Done():
+			// Deadline reached (or already elapsed when we got here). A final
+			// non-blocking check distinguishes "exited at the same instant"
+			// from genuinely stuck, so a service is never reported abandoned
+			// after its supervisor actually returned.
+			select {
+			case <-e.exited:
+			default:
+				stuck = append(stuck, e.name)
+			}
+		}
+	}
+
+	return stuck
 }
 
 func (q *Services) supervise(ctx context.Context, srv Service, errs chan error, wg *sync.WaitGroup, done <-chan struct{}) {

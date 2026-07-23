@@ -73,7 +73,10 @@ func main() {
 ## Key concepts
 
 - **`Controller`** — the supervisor. `Register` services before `Start`; `Wait`
-  blocks until the full shutdown sequence has completed.
+  blocks until the full shutdown sequence has completed and every supervisor
+  goroutine has unwound (it requires context-respecting start callbacks —
+  `WaitContext` is the deadline-bounded variant for services that may wrap
+  cancellation-ignoring third-party code).
 - **Health probes** — attach `WithStatus` / `WithLiveness` / `WithReadiness` to
   a service, or register standalone `HealthCheck`s (sync, or async with an
   `Interval`). `Status()` / `Liveness()` / `Readiness()` aggregate them into a

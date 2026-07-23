@@ -20,7 +20,9 @@ for long-running Go processes. Register your services (HTTP/gRPC servers,
 background workers, schedulers), and the `Controller` orchestrates their startup
 ordering, monitors their health (liveness/readiness), forwards OS signals, and
 drives a bounded graceful shutdown in reverse registration order — with an
-optional self-healing restart policy.
+optional self-healing restart policy. The shutdown bound covers stop callbacks
+*and* supervisor exit: a context-ignoring stop — or a start that never returns —
+is abandoned (and named in a WARN) at the deadline rather than wedging shutdown.
 
 It is the same supervisor behind go-tool-base's service commands, extracted so
 any project can adopt it **without** pulling in the framework.
@@ -76,7 +78,10 @@ func main() {
 ## Key concepts
 
 - **`Controller`** — the supervisor. `Register` services before `Start`; `Wait`
-  blocks until the full shutdown sequence completes.
+  blocks until the full shutdown sequence completes and every supervisor
+  goroutine has unwound (it requires context-respecting start callbacks —
+  `WaitContext` is the deadline-bounded variant for services that may wrap
+  cancellation-ignoring third-party code).
 - **Health probes** — attach `WithStatus` / `WithLiveness` / `WithReadiness` to a
   service, or register standalone `HealthCheck`s (sync or async with an
   `Interval`). `Status()` / `Liveness()` / `Readiness()` return aggregate

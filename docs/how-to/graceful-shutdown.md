@@ -2,9 +2,10 @@
 
 The controller drives a bounded, ordered shutdown: it cancels the context every
 service shares, runs each `WithStop` in reverse registration order, and force-
-abandons a stuck stop at a deadline so `Wait()` can never hang forever. This
-guide covers the timeout, signal handling, and how a service distinguishes a
-controlled stop from an upstream cancellation.
+abandons a stuck stop — or a supervisor whose `WithStart` never returns — at a
+deadline so the shutdown sequence itself can never hang. This guide covers the
+timeout, signal handling, bounding your wait with `WaitContext`, and how a
+service distinguishes a controlled stop from an upstream cancellation.
 
 ## The shutdown sequence
 
@@ -17,7 +18,9 @@ cancellation, shutdown always runs the same sequence:
    `WithStart` that waits on `ctx.Done()`.
 4. Run each `WithStop` in **reverse registration order**, bounded by the shutdown
    timeout.
-5. Transition to `Stopped` and release `Wait()`.
+5. Await supervisor exit with the *remaining* shutdown budget, logging a WARN
+   naming any service whose `WithStart` failed to return (it is abandoned).
+6. Transition to `Stopped` and release `Wait()`.
 
 ## Set the shutdown timeout
 
@@ -68,6 +71,29 @@ controls.WithStop(func(ctx context.Context) {
 })
 ```
 
+## Bound your wait against a stuck start
+
+The bare `Wait()` is unbounded: it returns only once every supervisor goroutine
+has unwound, which requires every `WithStart` to return after cancellation. If a
+start wraps third-party code that may ignore its context, use `WaitContext` so
+your process cannot hang on a controller that already reports `Stopped`:
+
+```go
+c.Start()
+
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+if err := c.WaitContext(ctx); err != nil {
+	// The wait was abandoned: some StartFunc never returned. The shutdown
+	// sequence itself completed; the stuck service was named in a WARN log.
+}
+```
+
+On the abandon path the stuck supervisor goroutine is deliberately leaked — the
+same tradeoff as an abandoned stop. See
+[D10 in Concurrency & shutdown correctness](../explanation/concurrency.md).
+
 ## Signal handling
 
 By default `NewController` registers handlers for `SIGINT` and `SIGTERM`. The
@@ -115,7 +141,8 @@ controller* initiated the stop.
 
 ## Related
 
-- [Concurrency & shutdown correctness](../explanation/concurrency.md) — why
-  `Wait()` cannot hang and why no goroutine leaks or busy-spins.
+- [Concurrency & shutdown correctness](../explanation/concurrency.md) — what
+  the shutdown bound covers (and D10, the stuck-start abandon policy), why no
+  goroutine leaks or busy-spins.
 - [Architecture](../explanation/architecture.md) — the state machine and control
   goroutines behind the sequence above.

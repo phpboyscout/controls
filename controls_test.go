@@ -70,10 +70,11 @@ func TestController_Controls(t *testing.T) {
 		assert.True(t, c.IsRunning())
 
 		c.Stop()
+		// The Stopped state lands just after the StopFunc runs (the shutdown
+		// sequence still awaits supervisor exit, D10), so poll for both.
 		assert.Eventually(t, func() bool {
-			return cntrs.Stopped.Load() == int64(1)
+			return cntrs.Stopped.Load() == int64(1) && c.IsStopped()
 		}, 1*time.Second, 10*time.Millisecond)
-		assert.True(t, c.IsStopped())
 	})
 
 	t.Run("status", func(t *testing.T) {
@@ -110,10 +111,10 @@ func TestController_Controls(t *testing.T) {
 		assert.True(t, c.IsRunning())
 		c.Messages() <- controls.Stop
 
+		// As above: the Stopped state lands just after the StopFunc runs.
 		assert.Eventually(t, func() bool {
-			return cntrs.Stopped.Load() == int64(1)
+			return cntrs.Stopped.Load() == int64(1) && c.IsStopped()
 		}, 1*time.Second, 10*time.Millisecond)
-		assert.True(t, c.IsStopped())
 	})
 
 }

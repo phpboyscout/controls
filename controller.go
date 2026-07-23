@@ -256,8 +256,36 @@ func (c *Controller) Start() {
 	c.logger.Debug("All services should now be running")
 }
 
+// Wait blocks until every supervisor goroutine and the shutdown sequence have
+// finished. It is unbounded and REQUIRES context-respecting StartFuncs: a
+// StartFunc that never returns after cancellation pins its supervisor
+// goroutine, and Wait blocks forever — even though the controller itself has
+// completed shutdown and reports Stopped. When a service wraps third-party
+// code that may ignore cancellation, use WaitContext to bound the wait (D10).
 func (c *Controller) Wait() {
 	c.wg.Wait()
+}
+
+// WaitContext blocks until all supervisor goroutines have exited, or until ctx
+// is done, whichever comes first. It returns nil on a clean drain and ctx.Err()
+// when the wait is abandoned. On the abandon path the internal helper goroutine
+// (and any stuck supervisors pinning the wait group) are deliberately leaked —
+// the same abandon-at-deadline tradeoff the shutdown sequence applies to
+// context-ignoring StopFuncs (D10).
+func (c *Controller) WaitContext(ctx context.Context) error {
+	drained := make(chan struct{})
+
+	go func() {
+		c.wg.Wait()
+		close(drained)
+	}()
+
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Stop initiates a graceful shutdown. Duplicate calls while already
@@ -420,6 +448,19 @@ func (c *Controller) handleStopMessage() {
 	c.cancelHealthChecks()
 
 	c.services.stop(ctx)
+
+	// Bound the wait for supervisor exits with the remaining shutdown budget —
+	// one deadline covers the whole "bounded shutdown" contract (D10). A
+	// StartFunc that ignores cancellation pins its supervisor goroutine (and
+	// the wait group) forever; abandon it at the deadline and name it, turning
+	// a silent Wait() hang into a diagnosable message.
+	for _, name := range c.services.awaitSupervisors(ctx) {
+		c.logger.Warn(
+			"service StartFunc did not return before the shutdown deadline; abandoning its supervisor goroutine",
+			"service_name", name,
+		)
+	}
+
 	c.SetState(Stopped)
 	c.logger.Info("Stopped")
 

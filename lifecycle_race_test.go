@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -65,6 +66,53 @@ func TestStart_ShutdownDuringStartupNoCancelRace(t *testing.T) {
 
 			c.Wait()
 		}()
+	}
+}
+
+// TestWaitContext_ConcurrentCallersRace stresses D10 under -race: WaitContext
+// called concurrently from multiple goroutines, racing a signal-driven shutdown
+// (pre-loaded signal, mirroring the D8 stress pattern). Every caller must
+// return nil once the controller drains cleanly, with no data race between the
+// helper goroutines each WaitContext spawns.
+func TestWaitContext_ConcurrentCallersRace(t *testing.T) {
+	t.Parallel()
+
+	for iter := 0; iter < 20; iter++ {
+		sigs := make(chan os.Signal, 1)
+		// Pre-load the signal so shutdown races the concurrent waiters from the
+		// earliest possible moment.
+		sigs <- syscall.SIGTERM
+
+		c := controls.NewController(context.Background(),
+			controls.WithLogger(slog.New(slog.DiscardHandler)),
+		)
+		c.SetSignalsChannel(sigs)
+
+		c.Register("conforming",
+			controls.WithStart(func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}),
+			controls.WithStop(func(_ context.Context) {}),
+		)
+
+		c.Start()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				assert.NoError(t, c.WaitContext(ctx), "concurrent WaitContext must drain cleanly")
+			}()
+		}
+
+		wg.Wait()
+		cancel()
 	}
 }
 
