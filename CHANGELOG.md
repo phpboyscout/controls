@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.1.3](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.3)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.1.2...v0.1.3)
+
+### Bug Fixes
+
+- **controller**: bound the wait against context-ignoring StartFuncs (D10) ([c22f525](https://gitlab.com/phpboyscout/go/controls/-/commit/c22f5254df506d9d941617d972e41e992b5a8cf5))
+
 ## [v0.1.2](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.2)
 
 ### Bug Fixes
