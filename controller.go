@@ -297,7 +297,14 @@ func (c *Controller) Stop() {
 		return
 	}
 
-	c.messages <- Stop
+	// Guard the send against an already-completed shutdown (D9). If this caller
+	// won the CAS but was descheduled while a direct-channel Stop drove the full
+	// shutdown, the message processor has already exited and there is no receiver;
+	// an unguarded send on the unbuffered channel would block forever.
+	select {
+	case c.messages <- Stop:
+	case <-c.shutdownComplete:
+	}
 }
 
 // Controls sets the handlers for different control operations.
