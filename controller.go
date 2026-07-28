@@ -535,6 +535,16 @@ func (c *Controller) healthCheckStatuses(filter func(CheckType) bool, failClosed
 
 		r := entry.result(c.ctx)
 		s, healthy := toServiceStatus(entry.check.Name, r, failClosed)
+
+		// A stale async cache means the refresh loop is no longer producing fresh
+		// results; the cached value cannot be trusted. Surface it as an error in
+		// every aggregation (so Status() shows it) and fail readiness closed (D11).
+		if entry.stale(r, time.Now()) {
+			s.Status = "ERROR"
+			s.Error = "cached health result is stale"
+			healthy = false
+		}
+
 		statuses = append(statuses, s)
 
 		if !healthy {

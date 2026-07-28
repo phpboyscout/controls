@@ -8,6 +8,11 @@ import (
 
 const defaultCheckTimeout = 5 * time.Second
 
+// stalenessIntervalMultiple bounds how old an async cached result may be before
+// it is treated as stale: older than this multiple of the check's Interval and
+// the cache is no longer trusted (D11).
+const stalenessIntervalMultiple = 3
+
 // healthCheckEntry wraps a HealthCheck with its cached result and cancellation.
 type healthCheckEntry struct {
 	check      HealthCheck
@@ -15,7 +20,14 @@ type healthCheckEntry struct {
 	cancel     context.CancelFunc
 }
 
-// runCheck executes the health check with the configured timeout and stores the result.
+// runCheck executes the health check with the configured timeout and stores the
+// result. The check runs in its own goroutine and runCheck selects on the
+// timeout context: a check that ignores its deadline can therefore never block
+// the caller — the inline Status()/Readiness() request on the sync path, or the
+// ticker goroutine on the async path. On expiry a timeout CheckResult is
+// recorded and the abandoned check goroutine is left to finish on its own,
+// matching the StopFunc-abandonment policy (D11). The done channel is buffered
+// so that late send never blocks the abandoned goroutine.
 func (e *healthCheckEntry) runCheck(parentCtx context.Context) {
 	timeout := e.check.Timeout
 	if timeout == 0 {
@@ -25,9 +37,37 @@ func (e *healthCheckEntry) runCheck(parentCtx context.Context) {
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	result := e.check.Check(ctx)
+	done := make(chan CheckResult, 1)
+
+	go func() {
+		done <- e.check.Check(ctx)
+	}()
+
+	var result CheckResult
+
+	select {
+	case result = <-done:
+	case <-ctx.Done():
+		result = CheckResult{
+			Status:  CheckUnhealthy,
+			Message: "health check timed out",
+		}
+	}
+
 	result.Timestamp = time.Now()
 	e.lastResult.Store(&result)
+}
+
+// stale reports whether an async cached result is older than
+// stalenessIntervalMultiple x Interval. Sync checks (Interval == 0) run inline on
+// every request and are never stale; a nil result is handled by the fail-closed
+// path in toServiceStatus, not here.
+func (e *healthCheckEntry) stale(r *CheckResult, now time.Time) bool {
+	if e.check.Interval <= 0 || r == nil {
+		return false
+	}
+
+	return now.Sub(r.Timestamp) > time.Duration(stalenessIntervalMultiple)*e.check.Interval
 }
 
 // result returns the latest check result. For sync checks, it runs the check
