@@ -2,7 +2,7 @@
 
 # controls
 
-**Service-lifecycle supervisor for Go — startup ordering, health probes, graceful shutdown, self-healing restarts**
+**Service-lifecycle supervisor for Go — concurrent startup, health probes, ordered (reverse-registration) shutdown, self-healing restarts**
 
 [![Go Reference](https://pkg.go.dev/badge/gitlab.com/phpboyscout/go/controls.svg)](https://pkg.go.dev/gitlab.com/phpboyscout/go/controls)
 [![Pipeline](https://gitlab.com/phpboyscout/go/controls/badges/main/pipeline.svg)](https://gitlab.com/phpboyscout/go/controls/-/pipelines)

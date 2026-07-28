@@ -79,6 +79,12 @@ counter is reset to zero — the service proved it can run healthily, so an old
 failure should not count against it. Only failures that pile up *faster* than the
 reset window accumulate toward `MaxRestarts`.
 
+The **backoff** is reset alongside the counter: a run that cleared the reset
+window returns the next wait to `InitialBackoff` rather than the accumulated
+`MaxBackoff`. Without this, a service that ran healthily for hours would still
+wait the full `MaxBackoff` before its next restart, as if the old failures never
+aged out.
+
 When the counter does reach `MaxRestarts`, the supervisor gives up: it records a
 `max restarts exceeded` error (wrapping the last real error) and stops
 supervising that service.

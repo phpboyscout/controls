@@ -119,14 +119,64 @@ the `shutdownComplete` case wins and the send is abandoned. This makes every
 error forward provably non-blocking, so a late error can never wedge a supervisor
 goroutine during teardown.
 
+`Stop()` is a second sender covered by the same guard. After winning the
+`Running → Stopping` CAS it sends a `Stop` control message to the message
+processor. But if the caller is descheduled after the CAS while a direct-channel
+`Stop` drives the whole shutdown, the processor exits before the send lands —
+and an unguarded send on the unbuffered message channel would block forever.
+`Stop()` therefore selects between the message send and `shutdownComplete`, so a
+`Stop` racing a completing shutdown returns promptly instead of hanging.
+
+## D11 — health-check timeout is raced, and stale async caches fail closed
+
+A `HealthCheck.Check` carries a `Timeout`, but a check that ignores its context
+would defeat it: run inline from `Status()`/`Readiness()`, a context-ignoring
+check hangs every health request; run from the async ticker goroutine, it wedges
+the refresh so the cache never updates and readiness serves the last *healthy*
+result forever — a dead dependency reported healthy.
+
+Each run is therefore executed in its own goroutine and raced against the
+timeout context: whichever of the check result and `ctx.Done()` arrives first
+wins. On expiry the run records a timeout `CheckResult` (`"ERROR"`) and returns;
+the abandoned check goroutine is **left to finish on its own**, the same
+abandon-at-deadline tradeoff the stop path (D10) and the supervisor wait accept.
+The hand-off channel is buffered so the abandoned goroutine's late send never
+blocks.
+
+As a second line of defence, an async cached result older than **three times**
+the check's `Interval` is treated as **stale**: the refresh loop is assumed to
+have stalled, so the cache can no longer be trusted. A stale entry is reported
+`"ERROR"` in every aggregation — it fails readiness closed *and* is surfaced in
+`Status()` — rather than serving a stale healthy value indefinitely.
+
+## D12 — the stop sequence does not hold the services mutex
+
+Shutting services down runs each `WithStop` in reverse registration order and
+awaits it against the shutdown deadline — potentially the whole shutdown timeout.
+`status()`, `liveness()`, and `readiness()` all take the same `services` mutex,
+so holding it across the stop sequence would block every health/readiness probe
+until shutdown finished — exactly when a load balancer most needs a prompt
+not-ready answer.
+
+The stop sequence therefore **snapshots the service slice under the lock and
+releases it** before running any `WithStop`. Registration is already impossible
+once the controller is `Stopping`, so the snapshot cannot go stale, and the
+health probes stay responsive throughout shutdown.
+
 ## Signal registration hygiene
 
 OS-signal registration is handled so it can neither be orphaned nor swallow
 signals:
 
-- `signal.Notify` is called **only after** all options are applied, and only if a
-  signal channel survives — so `WithoutSignals` genuinely leaves `SIGINT`/`SIGTERM`
-  with their default disposition rather than registering then discarding a handler.
+- `signal.Notify` is deferred to `Start` (in `startSignalHandler`), where it is
+  registered **only if a signal channel survives** and **paired with the reader
+  goroutine launched immediately below it**. Registering at construction would
+  leave a controller that is constructed but never started with a handler and no
+  reader — silently swallowing `SIGINT`/`SIGTERM` so the process ignores Ctrl-C.
+  Deferring registration to `Start` means an unstarted controller keeps the
+  signals at their default disposition.
+- `WithoutSignals` sets the channel to `nil`, so `startSignalHandler` returns
+  before registering anything.
 - The registration is detached with `signal.Stop` when the signal channel is
   swapped out and again at shutdown, so a late signal never lands on a channel no
   one is reading.

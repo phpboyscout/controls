@@ -29,7 +29,7 @@ func TestStatusProbe(t *testing.T) {
 ## Drive a real controller
 
 For a lifecycle test, register against a real controller and drive it. This
-exercises startup ordering, health aggregation, and shutdown for real:
+exercises concurrent startup, health aggregation, and shutdown for real:
 
 ```go
 func TestServiceLifecycle(t *testing.T) {

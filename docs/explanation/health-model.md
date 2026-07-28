@@ -66,7 +66,18 @@ A check's `Interval` decides how it is evaluated:
   interval and caches the latest `CheckResult`; reports read the cache. This
   decouples an expensive dependency probe from health-request volume.
 
-Both paths bound a single run with the check's `Timeout` (default 5s).
+Both paths bound a single run with the check's `Timeout` (default 5s). The
+timeout is **enforced even if the check ignores its context**: the run executes
+in its own goroutine and is raced against the deadline, so a check that never
+returns cannot hang the inline sync request or wedge the async ticker. On expiry
+the run records a timeout `CheckResult` (`"ERROR"`) and the abandoned goroutine
+is left to finish on its own.
+
+For async checks there is also a **staleness bound**: if the cached result is
+older than three times the check's `Interval`, the refresh loop is assumed to
+have stalled and the cache is no longer trusted. A stale entry is reported as
+`"ERROR"` in every report — it fails readiness closed and is surfaced in
+`Status()` — rather than serving a last-known-healthy result indefinitely.
 
 ## Why readiness fails closed
 

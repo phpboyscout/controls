@@ -1,7 +1,7 @@
 # controls
 
 A small **service-lifecycle supervisor** for long-running Go processes —
-startup ordering, health probes, graceful shutdown, and self-healing restarts,
+concurrent startup, health probes, ordered (reverse-registration) shutdown, and self-healing restarts,
 behind one `Controller`, as a light, framework-free library.
 
 `controls` is the same supervisor behind [go-tool-base](https://gitlab.com/phpboyscout/go-tool-base)'s
