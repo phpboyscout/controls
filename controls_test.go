@@ -77,33 +77,6 @@ func TestController_Controls(t *testing.T) {
 		}, 1*time.Second, 10*time.Millisecond)
 	})
 
-	t.Run("status", func(t *testing.T) {
-		c, cntrs, _ := getNewController(context.Background())
-		c.Start()
-
-		assert.True(t, c.IsRunning())
-		c.Messages() <- controls.Status
-		assert.Eventually(t, func() bool {
-			return cntrs.Statused.Load() == int64(1)
-		}, 1*time.Second, 10*time.Millisecond)
-		assert.True(t, c.IsRunning())
-	})
-
-	t.Run("multiple status calls", func(t *testing.T) {
-		c, cntrs, _ := getNewController(context.Background())
-		c.Start()
-
-		assert.True(t, c.IsRunning())
-		for i := 1; i <= 3; i++ {
-			c.Messages() <- controls.Status
-			expected := int64(i)
-			assert.Eventually(t, func() bool {
-				return cntrs.Statused.Load() == expected
-			}, 1*time.Second, 10*time.Millisecond)
-		}
-		assert.True(t, c.IsRunning())
-	})
-
 	t.Run("stop running controller", func(t *testing.T) {
 		c, cntrs, _ := getNewController(context.Background())
 		c.Start()
@@ -190,27 +163,6 @@ func TestController_SetMessageChannels(t *testing.T) {
 	msgs := make(chan controls.Message)
 	c.SetMessageChannel(msgs)
 	assert.Equal(t, msgs, c.Messages())
-}
-
-func TestController_Health(t *testing.T) {
-	c, _, _ := getNewController(context.Background())
-	health := make(chan controls.HealthMessage)
-	c.SetHealthChannel(health)
-
-	go func(t *testing.T, health chan controls.HealthMessage) {
-		h := <-health
-		assert.Equal(t, "testHost", h.Host)
-		assert.Equal(t, 1, h.Port)
-		assert.Equal(t, 2, h.Status)
-		assert.Equal(t, "testMessage", h.Message)
-	}(t, health)
-
-	c.Health() <- controls.HealthMessage{
-		Host:    "testHost",
-		Port:    1,
-		Status:  2,
-		Message: "testMessage",
-	}
 }
 
 func TestStop_ConcurrentCalls(t *testing.T) {

@@ -63,8 +63,7 @@ type HealthCheck struct {
 }
 
 const (
-	Stop   Message = "stop"
-	Status Message = "status"
+	Stop Message = "stop"
 )
 
 const (
@@ -74,7 +73,7 @@ const (
 	Stopped  State = "stopped"
 )
 
-// State represents the lifecycle state of the controller (Created, Starting, Running, Stopped).
+// State represents the lifecycle state of the controller (Unknown, Running, Stopping, Stopped).
 type State string
 
 // Message represents a control message sent to the controller (e.g. "stop").
@@ -193,14 +192,6 @@ type HealthReport struct {
 	Services       []ServiceStatus `json:"services"`
 }
 
-// HealthMessage is the JSON response body for HTTP health endpoints.
-type HealthMessage struct {
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	Status  int    `json:"status"`
-	Message string `json:"message"`
-}
-
 // Runner provides service lifecycle operations.
 type Runner interface {
 	Start()
@@ -249,7 +240,6 @@ type Configurable interface {
 	SetErrorsChannel(errs chan error)
 	SetMessageChannel(control chan Message)
 	SetSignalsChannel(sigs chan os.Signal)
-	SetHealthChannel(health chan HealthMessage)
 	SetWaitGroup(wg *sync.WaitGroup)
 	SetShutdownTimeout(d time.Duration)
 	SetLogger(l *slog.Logger)
@@ -258,7 +248,6 @@ type Configurable interface {
 // ChannelProvider provides access to controller channels.
 type ChannelProvider interface {
 	Messages() chan Message
-	Health() chan HealthMessage
 	Errors() chan error
 	Signals() chan os.Signal
 }

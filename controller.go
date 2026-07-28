@@ -21,14 +21,14 @@ var ErrShutdown = errors.New("controller shutdown")
 // services are force-stopped.
 const DefaultShutdownTimeout = 5 * time.Second
 
-// Controller orchestrates the lifecycle of registered services: startup
-// ordering, health monitoring, graceful shutdown, and signal handling.
+// Controller orchestrates the lifecycle of registered services: concurrent
+// startup, health monitoring, ordered (reverse-registration) shutdown, and
+// signal handling.
 type Controller struct {
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
 	logger          *slog.Logger
 	messages        chan Message
-	health          chan HealthMessage
 	errs            chan error
 	signals         chan os.Signal
 	wg              *sync.WaitGroup
@@ -54,14 +54,6 @@ func (c *Controller) Messages() chan Message {
 
 func (c *Controller) SetMessageChannel(messages chan Message) {
 	c.messages = messages
-}
-
-func (c *Controller) Health() chan HealthMessage {
-	return c.health
-}
-
-func (c *Controller) SetHealthChannel(health chan HealthMessage) {
-	c.health = health
 }
 
 func (c *Controller) Signals() chan os.Signal {
@@ -413,13 +405,9 @@ func (c *Controller) processControlMessages() {
 	for {
 		select {
 		case msg := <-c.Messages():
-			switch msg {
-			case Stop:
+			if msg == Stop {
 				c.logger.Debug("received Stop message")
 				c.handleStopMessage()
-			case Status:
-				c.logger.Debug("received Status message")
-				_ = c.services.status()
 			}
 		case <-c.shutdownComplete:
 			return
@@ -692,7 +680,6 @@ func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 		cancel:           cancel,
 		logger:           slog.New(slog.DiscardHandler),
 		messages:         make(chan Message),
-		health:           make(chan HealthMessage),
 		errs:             make(chan error),
 		signals:          make(chan os.Signal, 1),
 		wg:               &sync.WaitGroup{},
