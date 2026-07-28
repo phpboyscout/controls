@@ -320,6 +320,14 @@ func (c *Controller) startSignalHandler() {
 		return
 	}
 
+	// Register the OS-signal handler here — paired with the reader goroutine
+	// launched just below — rather than at construction. A controller that is
+	// constructed but never started must not register a handler with no reader,
+	// which would swallow SIGINT/SIGTERM and leave the process ignoring Ctrl-C
+	// (F5). The registration is detached again on shutdown and on SetSignalsChannel
+	// (D6).
+	signal.Notify(c.signals, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		select {
 		case sig := <-c.Signals():
@@ -699,12 +707,10 @@ func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 		opt(c)
 	}
 
-	// Register OS-signal handling only after options are applied, and only if a
-	// signal channel survives (WithoutSignals sets it to nil). This prevents an
-	// orphaned signal.Notify registration that would swallow SIGINT/SIGTERM (D6).
-	if c.signals != nil {
-		signal.Notify(c.signals, syscall.SIGINT, syscall.SIGTERM)
-	}
+	// OS-signal registration is deferred to Start (startSignalHandler), where it is
+	// paired with the reader goroutine. Registering here would leave a controller
+	// that is constructed but never started swallowing SIGINT/SIGTERM with no
+	// reader (F5).
 
 	return c
 }
