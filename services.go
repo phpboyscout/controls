@@ -374,12 +374,21 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs c
 // context-ignoring stop is abandoned at the shutdown deadline rather than hanging
 // the caller (and Wait()) forever. The abandoned goroutine is left to finish on
 // its own. Returns the number of services.
+//
+// The service slice is snapshotted under the lock and the lock is then released
+// for the whole stop sequence (D12). Holding q.mu while awaiting every StopFunc —
+// up to the entire shutdown timeout — would block status()/liveness()/readiness()
+// on the same mutex, so every health probe would hang exactly when a load
+// balancer most needs a prompt not-ready answer. Registration is impossible once
+// the controller is Stopping, so the snapshot cannot go stale.
 func (q *Services) stop(ctx context.Context) int {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	services := make([]Service, len(q.services))
+	copy(services, q.services)
+	q.mu.Unlock()
 
-	for i := len(q.services) - 1; i >= 0; i-- {
-		s := q.services[i]
+	for i := len(services) - 1; i >= 0; i-- {
+		s := services[i]
 
 		done := make(chan struct{})
 
@@ -400,7 +409,7 @@ func (q *Services) stop(ctx context.Context) int {
 		}
 	}
 
-	return len(q.services)
+	return len(services)
 }
 
 // callStop invokes a StopFunc, recovering from a panic so a misbehaving stop
