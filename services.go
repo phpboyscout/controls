@@ -262,15 +262,21 @@ type restartTimings struct {
 	resetInterval time.Duration
 }
 
-func resolveRestartTimings(p *RestartPolicy) restartTimings {
-	t := restartTimings{
-		backoff:       p.InitialBackoff,
-		maxBackoff:    p.MaxBackoff,
-		resetInterval: p.RestartResetInterval,
+// initialBackoff resolves the starting backoff for a policy, applying the default
+// when unset. Shared by the initial timings and the post-healthy-run reset.
+func initialBackoff(p *RestartPolicy) time.Duration {
+	if p.InitialBackoff == 0 {
+		return defaultInitialBackoff
 	}
 
-	if t.backoff == 0 {
-		t.backoff = defaultInitialBackoff
+	return p.InitialBackoff
+}
+
+func resolveRestartTimings(p *RestartPolicy) restartTimings {
+	t := restartTimings{
+		backoff:       initialBackoff(p),
+		maxBackoff:    p.MaxBackoff,
+		resetInterval: p.RestartResetInterval,
 	}
 
 	if t.maxBackoff == 0 {
@@ -326,10 +332,13 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs c
 			return
 		}
 
-		// The run ended in a failure (Start error or health breach). Reset the
-		// consecutive-failure counter if it ran healthily for long enough.
+		// The run ended in a failure (Start error or health breach). If it ran
+		// healthily for long enough, reset both the consecutive-failure counter
+		// and the backoff (F6a) — otherwise a service healthy for hours still
+		// waits the accumulated MaxBackoff before its next restart.
 		if time.Since(runStarted) >= timings.resetInterval {
 			restarts = 0
+			timings.backoff = initialBackoff(srv.RestartPolicy)
 		}
 
 		// Check if we've exhausted restarts.
