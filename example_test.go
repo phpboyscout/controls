@@ -12,8 +12,9 @@ import (
 func ExampleNewController() {
 	ctx := context.Background()
 
-	// Create a controller (WithoutSignals for non-daemon usage)
-	controller := controls.NewController(ctx, controls.WithoutSignals())
+	// Create a controller. No OS signal handler is installed by default; a
+	// standalone daemon that owns signals adds controls.WithSignals().
+	controller := controls.NewController(ctx)
 
 	// Register an HTTP service
 	controller.Register("http-api",
@@ -39,7 +40,7 @@ func ExampleNewController() {
 }
 
 func ExampleWithRestartPolicy() {
-	controller := controls.NewController(context.Background(), controls.WithoutSignals())
+	controller := controls.NewController(context.Background())
 
 	controller.Register("worker",
 		controls.WithStart(func(ctx context.Context) error {
@@ -56,7 +57,7 @@ func ExampleWithRestartPolicy() {
 }
 
 func ExampleWithLiveness() {
-	controller := controls.NewController(context.Background(), controls.WithoutSignals())
+	controller := controls.NewController(context.Background())
 
 	controller.Register("api",
 		controls.WithStart(func(ctx context.Context) error { return nil }),

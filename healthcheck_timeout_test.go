@@ -20,7 +20,6 @@ func newDiscardController(t *testing.T, release chan struct{}) *controls.Control
 	t.Helper()
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
 	// Registered first -> runs last: stop/wait happens after release is closed.

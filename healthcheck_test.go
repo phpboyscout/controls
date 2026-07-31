@@ -18,7 +18,6 @@ func newTestController(t *testing.T) *controls.Controller {
 	t.Helper()
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
 	t.Cleanup(func() {
@@ -355,7 +354,6 @@ func TestAsyncCheck_StopsOnShutdown(t *testing.T) {
 	var callCount atomic.Int64
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
 
@@ -399,7 +397,6 @@ func TestAsyncCheck_ContextCancelledOnStop(t *testing.T) {
 	var once sync.Once
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
 

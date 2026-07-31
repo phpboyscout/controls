@@ -13,7 +13,7 @@ import (
 func TestStop_ReturnsAfterShutdownComplete(t *testing.T) {
 	t.Parallel()
 
-	c := NewController(context.Background(), WithoutSignals())
+	c := NewController(context.Background())
 
 	// Simulate: caller A won the CAS (Running), then the full shutdown ran and
 	// the message processor exited before A's send.

@@ -163,10 +163,44 @@ releases it** before running any `WithStop`. Registration is already impossible
 once the controller is `Stopping`, so the snapshot cannot go stale, and the
 health probes stay responsive throughout shutdown.
 
+## Who owns the signal handler
+
+**The outermost layer does, and by default that is not the controller.**
+`signal.Notify` is additive: every registered channel receives a copy of every
+signal. A library that registers a handler has not chosen a helpful default, it
+has quietly become a co-owner of process-global state — and two owners means two
+shutdown drivers running concurrently on one `Ctrl-C`.
+
+That is not hypothetical. When a CLI framework above the controller also
+translated signals into context cancellation, both fired, and which cancellation
+landed first decided whether `context.Cause` reported `ErrShutdown` or the
+parent's cause. A documented guarantee, resolved by goroutine scheduling.
+
+So the controller does not register by default. It observes the context it was
+given, and `WithSignals` is available for the standalone case where the
+controller genuinely is outermost.
+
+## Cause determinism
+
+The controller derives its context with
+`context.WithCancelCause(context.WithoutCancel(parent))` and watches
+`parent.Done()` separately. The parent's completion is a **trigger** for the
+normal shutdown sequence, not the cancellation itself.
+
+The alternative — deriving directly from the parent — cannot give a dependable
+cause. Once the parent cancels, the child is already cancelled with the parent's
+cause, and the controller's own `cancel(ErrShutdown)` is a no-op, because the
+first cancellation wins. Severing is what makes `ErrShutdown` unconditional.
+
+`parent.Done()` closes on deadline expiry as well as cancellation, so an expired
+deadline routes through the same path and produces an orderly teardown bounded by
+the shutdown timeout, rather than handing every `WithStop` a context that is
+already dead.
+
 ## Signal registration hygiene
 
-OS-signal registration is handled so it can neither be orphaned nor swallow
-signals:
+When signals *are* enabled, registration is handled so it can neither be orphaned
+nor swallow signals:
 
 - `signal.Notify` is deferred to `Start` (in `startSignalHandler`), where it is
   registered **only if a signal channel survives** and **paired with the reader
@@ -175,7 +209,7 @@ signals:
   reader — silently swallowing `SIGINT`/`SIGTERM` so the process ignores Ctrl-C.
   Deferring registration to `Start` means an unstarted controller keeps the
   signals at their default disposition.
-- `WithoutSignals` sets the channel to `nil`, so `startSignalHandler` returns
+- Without `WithSignals` the channel is `nil`, so `startSignalHandler` returns
   before registering anything.
 - The registration is detached with `signal.Stop` when the signal channel is
   swapped out and again at shutdown, so a late signal never lands on a channel no

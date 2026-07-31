@@ -21,12 +21,26 @@ var ErrShutdown = errors.New("controller shutdown")
 // services are force-stopped.
 const DefaultShutdownTimeout = 5 * time.Second
 
+// signalChanBuffer sizes the opt-in signal channel. One slot is enough: the
+// handler distinguishes only "first signal" (graceful stop) from "second
+// signal" (release the handler), and it is reading again before the second can
+// matter.
+const signalChanBuffer = 1
+
 // Controller orchestrates the lifecycle of registered services: concurrent
 // startup, health monitoring, ordered (reverse-registration) shutdown, and
 // signal handling.
 type Controller struct {
-	ctx             context.Context
-	cancel          context.CancelCauseFunc
+	// ctx is the context every service receives. It is deliberately NOT
+	// cancellation-linked to the caller's context: the controller owns its own
+	// cancellation so that ErrShutdown is the cause of every stop it drives,
+	// whatever triggered it (spec 0001, D3).
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	// parent is the caller's context, retained only so the error/context handler
+	// can watch it. Its completion — by cancellation OR deadline — is a TRIGGER
+	// for a graceful Stop, not the cancellation itself.
+	parent          context.Context
 	logger          *slog.Logger
 	messages        chan Message
 	errs            chan error
@@ -347,10 +361,16 @@ func (c *Controller) startErrorAndContextHandler() {
 	// Handle errors and context cancellation. Exits once shutdown is complete so
 	// it neither leaks nor busy-spins on a permanently-ready ctx.Done() case.
 	go func() {
+		// Watch the PARENT, not c.ctx. Since D3 severed the two, c.ctx is only
+		// cancelled by the shutdown sequence itself — watching it here would mean
+		// the handler could never be the thing that initiates a stop. The parent's
+		// Done() closes on cancellation AND on deadline expiry, so both arrive here
+		// and both become a graceful, bounded Stop.
+		//
 		// Local copy of the done channel; set to nil after first receipt so the
 		// select case is disabled and stops firing on every iteration (the
 		// busy-spin fix, D4).
-		done := c.GetContext().Done()
+		done := c.parent.Done()
 
 		for {
 			select {
@@ -366,7 +386,11 @@ func (c *Controller) startErrorAndContextHandler() {
 				done = nil // disable this case; ctx.Done() is now permanently ready
 
 				if !c.IsStopping() && !c.IsStopped() {
-					c.logger.Debug("stopping due to context cancellation", "error", c.GetContext().Err())
+					// Report the PARENT's cause: c.ctx has not been cancelled yet at
+					// this point (the Stop below is what cancels it), so reading its
+					// Err would log nil and lose the reason we are stopping.
+					c.logger.Debug("stopping due to parent context completion",
+						"error", context.Cause(c.parent))
 					c.Stop()
 				}
 			case <-c.shutdownComplete:
@@ -625,10 +649,20 @@ var (
 // ControllerOpt is a functional option for configuring a Controller.
 type ControllerOpt func(Configurable)
 
-// WithoutSignals disables OS signal handling.
-func WithoutSignals() ControllerOpt {
+// WithSignals gives the controller ownership of SIGINT/SIGTERM, so the first
+// signal drives a graceful Stop.
+//
+// Signal disposition is process-global, so it belongs to whichever layer is
+// outermost — which is why it is opt-in. In a CLI framework that already
+// translates signals into context cancellation (as go-tool-base's root command
+// does), do NOT use this: the controller observes the parent context instead,
+// and a second handler would race the framework's own. Reach for it in a
+// standalone main where the controller genuinely is the outermost thing.
+func WithSignals() ControllerOpt {
 	return func(c Configurable) {
-		c.SetSignalsChannel(nil)
+		// Buffered: signal.Notify never blocks, so an unbuffered channel would
+		// drop a signal that arrives before the handler goroutine is ready.
+		c.SetSignalsChannel(make(chan os.Signal, signalChanBuffer))
 	}
 }
 
@@ -670,18 +704,35 @@ func (c *Controller) setValidError(fn ValidErrorFunc) {
 }
 
 // NewController creates a Controller with the given context and options.
-// By default, it registers SIGINT and SIGTERM handlers for graceful shutdown.
-// Use WithoutSignals to disable signal handling (useful in tests).
+//
+// It does NOT install an OS signal handler. Signal disposition is process-global
+// state and belongs to whichever layer is outermost — typically the CLI framework
+// or main. Pass WithSignals when the controller genuinely is that outermost layer.
+//
+// The caller's context is watched but not inherited for cancellation: its
+// completion, by cancel or deadline, triggers a graceful Stop, so every service
+// observes ErrShutdown as its context cause. See docs/how-to/graceful-shutdown.md.
 func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
-	ctx, cancel := context.WithCancelCause(ctx)
+	// Sever cancellation from the caller's context, keeping its values (D3).
+	// The parent's completion still stops the services — startErrorAndContextHandler
+	// watches it and drives a graceful Stop — but it does so THROUGH the shutdown
+	// sequence, so the cause every service observes is ErrShutdown rather than
+	// whatever the parent happened to carry. Deriving directly from the parent
+	// would let the parent's cause win the race and silently void the contract
+	// documented in docs/how-to/graceful-shutdown.md.
+	parent := ctx
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 
 	c := &Controller{
-		ctx:              ctx,
-		cancel:           cancel,
-		logger:           slog.New(slog.DiscardHandler),
-		messages:         make(chan Message),
-		errs:             make(chan error),
-		signals:          make(chan os.Signal, 1),
+		ctx:      ctx,
+		cancel:   cancel,
+		parent:   parent,
+		logger:   slog.New(slog.DiscardHandler),
+		messages: make(chan Message),
+		errs:     make(chan error),
+		// nil by default: signal disposition is process-global and belongs to the
+		// outermost layer. Opt in with WithSignals (D1/D2).
+		signals:          nil,
 		wg:               &sync.WaitGroup{},
 		shutdownTimeout:  DefaultShutdownTimeout,
 		state:            Unknown,

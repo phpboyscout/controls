@@ -25,7 +25,7 @@ func findStatus(r HealthReport, name string) (ServiceStatus, bool) {
 func TestStaleAsyncCache_FailsReadinessAndSurfacesInStatus(t *testing.T) {
 	t.Parallel()
 
-	c := NewController(context.Background(), WithoutSignals())
+	c := NewController(context.Background())
 
 	// A healthy result stamped well beyond 3x the interval ago.
 	stale := &CheckResult{
@@ -62,7 +62,7 @@ func TestStaleAsyncCache_FailsReadinessAndSurfacesInStatus(t *testing.T) {
 func TestFreshAsyncCache_PassesReadiness(t *testing.T) {
 	t.Parallel()
 
-	c := NewController(context.Background(), WithoutSignals())
+	c := NewController(context.Background())
 
 	fresh := &CheckResult{
 		Status:    CheckHealthy,

@@ -24,7 +24,6 @@ func TestReadiness_RespondsWhileStopping(t *testing.T) {
 	t.Cleanup(func() { close(releaseStop) })
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 		controls.WithShutdownTimeout(500*time.Millisecond),
 	)

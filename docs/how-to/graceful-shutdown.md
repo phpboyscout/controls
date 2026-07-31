@@ -96,48 +96,112 @@ same tradeoff as an abandoned stop. See
 
 ## Signal handling
 
-By default `NewController` registers handlers for `SIGINT` and `SIGTERM`. The
-first signal initiates a graceful `Stop`. A **second** signal exits the signal
-handler immediately, so a caller can escalate (for example to `os.Exit`) if a
-shutdown is wedged.
+**The controller installs no signal handler by default.** Signal disposition is
+process-global state, so it belongs to whichever layer is outermost — usually
+your `main`, or the CLI framework wrapping it. A library that registers its own
+handler silently becomes a second owner of that global, and `signal.Notify` is
+additive: every registered channel receives a copy, so two handlers means two
+shutdowns racing.
 
-### Disable signals in tests
+So the controller observes rather than intercepts. Cancel the context you passed
+to `NewController` and the services shut down gracefully — see
+[Stopping from a parent context](#stopping-from-a-parent-context).
 
-Signal handling is unwanted in unit tests — you want to drive shutdown
-explicitly. `WithoutSignals` leaves `SIGINT`/`SIGTERM` with their default
-disposition (no orphaned registration):
+> [!important]
+> **Using a CLI framework? Do not opt in.** If something above you already turns
+> signals into context cancellation — go-tool-base's root command does — passing
+> `WithSignals` reintroduces exactly the double-handler race this default exists
+> to prevent. Let the framework own the signal and cancel your context.
+
+### Opting in from a standalone main
+
+When the controller genuinely *is* the outermost layer — a daemon with no CLI
+framework above it — ask for signals explicitly:
 
 ```go
-c := controls.NewController(ctx, controls.WithoutSignals())
+c := controls.NewController(ctx, controls.WithSignals())
+```
+
+The first `SIGINT`/`SIGTERM` initiates a graceful `Stop`. A **second** signal
+exits the signal handler immediately, so a caller can escalate (for example to
+`os.Exit`) if a shutdown is wedged.
+
+> [!caution]
+> A second interrupt overrides your shutdown budget. Where the outermost layer
+> force-exits on the second signal — as go-tool-base's root command does, with
+> `os.Exit(128+signum)` — the process dies immediately, mid-`WithStop` if
+> necessary. Size `WithShutdownTimeout` for the *graceful* path; a user pressing
+> `Ctrl-C` twice is deliberately overruling it.
+
+### Tests need no option
+
+Because signals are off by default, a test just constructs a controller and
+drives shutdown explicitly:
+
+```go
+c := controls.NewController(ctx)
 c.Start()
 // ... exercise the services ...
 c.Stop()
 c.Wait()
 ```
 
-## Distinguish a controlled stop
+### Stopping from a parent context
 
-When the controller shuts a service down, it cancels the context with a specific
-cause: `controls.ErrShutdown`. A service can check the cause to tell a
-*controlled* stop apart from an upstream cancellation (a failing parent context,
-a deadline) and react differently:
+Cancelling the context you passed to `NewController` triggers the same graceful
+sequence as `Stop()`. So does its deadline expiring:
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+c := controls.NewController(ctx)
+c.Start()
+
+cancel()  // -> ordered, bounded shutdown, exactly as Stop() would
+c.Wait()
+```
+
+The controller does not merely inherit that cancellation — it *reacts* to it,
+running the full shutdown sequence. That is what makes `ErrShutdown` reliable
+below, and it means an expired parent deadline gives your services an orderly
+teardown bounded by `WithShutdownTimeout`, rather than a context that is already
+dead when `WithStop` receives it.
+
+## Recognise a controlled stop
+
+When the controller shuts a service down it cancels the context with a specific
+cause, `controls.ErrShutdown`, so a service can recognise an orderly teardown and
+return an expected end-of-run rather than an error:
 
 ```go
 controls.WithStart(func(ctx context.Context) error {
 	<-ctx.Done()
 
 	if errors.Is(context.Cause(ctx), controls.ErrShutdown) {
-		// Orderly shutdown — return the cause as an expected end-of-run.
+		// Orderly shutdown — an expected end-of-run, not a failure.
 		return ctx.Err()
 	}
 
-	// Cancelled by something upstream — treat as an abnormal exit if you wish.
 	return context.Cause(ctx)
 })
 ```
 
-`context.Cause(ctx) == controls.ErrShutdown` is the reliable signal that *this
-controller* initiated the stop.
+**`ErrShutdown` is now the cause of every stop the controller drives** — a direct
+`Stop()`, a parent cancellation, an expired parent deadline, or a signal when you
+opted into `WithSignals`. One rule, no exceptions.
+
+> [!note]
+> **This changed in v0.2.0, and it is a deliberate narrowing.** The controller
+> used to derive its context directly from yours, so a parent cancellation left
+> the *parent's* cause on the service's context — meaning you could sometimes
+> tell an upstream cancel from a controlled stop. "Sometimes" is the problem:
+> which cause won was a race between the parent's cancellation and the
+> controller's own, so the distinction was never dependable.
+>
+> The controller now owns its cancellation outright and treats your context's
+> completion as a *trigger* for the normal shutdown sequence. You can no longer
+> distinguish *why* the controller stopped you from the cause alone — if a
+> service needs that, watch the parent context yourself. What you gain is that
+> `ErrShutdown` finally means something unconditional.
 
 ## Related
 

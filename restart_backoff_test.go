@@ -36,7 +36,6 @@ func TestRestartBackoff_ResetsAfterHealthyRun(t *testing.T) {
 	)
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
 

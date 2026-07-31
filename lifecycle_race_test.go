@@ -136,7 +136,6 @@ func TestSupervise_ErrorForwardDoesNotLeakOnShutdown(t *testing.T) {
 		var starts atomic.Int32
 
 		c := controls.NewController(context.Background(),
-			controls.WithoutSignals(),
 			controls.WithLogger(slog.New(slog.DiscardHandler)),
 		)
 		// A flapping service: returns a genuine error immediately with a tiny

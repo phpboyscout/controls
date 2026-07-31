@@ -5,9 +5,10 @@ concrete type you can drive directly, so most testing needs no mocks at all.
 When your own code depends on *a controller*, the `Controllable` interface (and
 the narrower interfaces beside it) let you substitute a fake.
 
-> **Disable signals in tests.** Always construct test controllers with
-> `controls.WithoutSignals()` so a test never installs process-wide
-> `SIGINT`/`SIGTERM` handlers. Drive shutdown explicitly with `Stop()`.
+> **Signals are already off.** A controller installs no `SIGINT`/`SIGTERM`
+> handler unless you ask for one, so a test needs no option to stay out of
+> process-wide state — just never pass `WithSignals`. Drive shutdown explicitly
+> with `Stop()`, or by cancelling the context you constructed it with.
 
 ## Test your Start/Stop/Status functions directly
 
@@ -35,7 +36,7 @@ exercises concurrent startup, health aggregation, and shutdown for real:
 func TestServiceLifecycle(t *testing.T) {
 	ctx := context.Background()
 
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	var started, stopped atomic.Bool
 	c.Register("worker",

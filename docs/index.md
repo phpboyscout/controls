@@ -84,7 +84,7 @@ func main() {
 - **Restart policy** — `WithRestartPolicy` enables self-healing with exponential
   backoff, a `MaxRestarts` cap, a health-failure threshold, and a
   consecutive-failure counter that resets after a healthy window.
-- **Options** — `WithLogger`, `WithShutdownTimeout`, `WithoutSignals` (tests),
+- **Options** — `WithLogger`, `WithShutdownTimeout`, `WithSignals` (standalone mains),
   and `WithValidError` (exempt expected terminal errors like
   `http.ErrServerClosed` from the restart count).
 

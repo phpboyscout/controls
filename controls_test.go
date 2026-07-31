@@ -198,10 +198,10 @@ var (
 )
 
 func TestControllerOpt_WithConfigurable(t *testing.T) {
-	// Verify that WithoutSignals works with the Configurable-typed parameter.
-	opt := controls.WithoutSignals()
+	// Verify that WithSignals works with the Configurable-typed parameter.
+	opt := controls.WithSignals()
 	c := controls.NewController(context.Background(), opt)
-	assert.Nil(t, c.Signals())
+	assert.NotNil(t, c.Signals())
 }
 
 func TestStop_AlreadyStopped(t *testing.T) {
@@ -223,7 +223,7 @@ func TestController_Status(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	c.Register("healthy-service",
 		controls.WithStart(func(_ context.Context) error { return nil }),
@@ -263,7 +263,7 @@ func TestController_Probes(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	c.Register("service-1",
 		controls.WithStart(func(_ context.Context) error { return nil }),
@@ -301,7 +301,7 @@ func TestController_Supervisor_NoPolicy(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	starts := atomic.Int32{}
 	c.Register("failing-service",
@@ -326,7 +326,7 @@ func TestController_Supervisor_WithPolicy(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	starts := atomic.Int32{}
 	c.Register("restarting-service",
@@ -362,7 +362,7 @@ func TestController_Supervisor_HealthTriggered(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	starts := atomic.Int32{}
 	statusCalls := atomic.Int32{}
@@ -401,7 +401,7 @@ func TestController_ServiceInfo(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	c := controls.NewController(ctx, controls.WithoutSignals())
+	c := controls.NewController(ctx)
 
 	c.Register("test-service",
 		controls.WithStart(func(_ context.Context) error {
@@ -447,7 +447,7 @@ func TestControllerErrorHandler_ExitsOnClose(t *testing.T) {
 	// Use a buffered channel so we can enqueue errors before the goroutine starts.
 	errs := make(chan error, 4)
 
-	c := controls.NewController(ctx, controls.WithoutSignals(), controls.WithLogger(slog.New(slog.DiscardHandler)))
+	c := controls.NewController(ctx, controls.WithLogger(slog.New(slog.DiscardHandler)))
 	c.SetErrorsChannel(errs)
 
 	c.Start()
@@ -469,7 +469,7 @@ func TestControllerErrorHandler_ExitsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := controls.NewController(ctx, controls.WithoutSignals(), controls.WithLogger(slog.New(slog.DiscardHandler)))
+	c := controls.NewController(ctx, controls.WithLogger(slog.New(slog.DiscardHandler)))
 	c.Start()
 
 	// Cancelling the parent context triggers the ctx.Done() branch in the error
@@ -493,7 +493,6 @@ func TestRegister_AfterStart_WarnsUnsupervised(t *testing.T) {
 	buf := &syncBuffer{}
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.NewTextHandler(buf, nil))),
 	)
 	c.Start()
@@ -521,7 +520,6 @@ func TestRegister_BeforeStart_NoWarning(t *testing.T) {
 	buf := &syncBuffer{}
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.NewTextHandler(buf, nil))),
 	)
 

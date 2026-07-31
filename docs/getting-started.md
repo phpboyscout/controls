@@ -28,12 +28,20 @@ unblocks.
 
 ```go
 ctx := context.Background()
-c := controls.NewController(ctx)
+c := controls.NewController(ctx, controls.WithSignals())
 ```
 
-With no options, the controller installs `SIGINT`/`SIGTERM` handlers
-automatically and logs to a discard handler. That is exactly what we want for a
-daemon: Ctrl-C should trigger a graceful shutdown.
+`WithSignals` asks the controller to handle `SIGINT`/`SIGTERM` itself, which is
+what we want here: this program is a standalone daemon, so the controller is the
+outermost layer and Ctrl-C should trigger a graceful shutdown.
+
+It is opt-in because signal disposition is process-global. If you are building on
+a CLI framework that already turns signals into context cancellation — go-tool-base
+does — leave it off and let the framework cancel the context you pass in; the
+controller shuts down just the same. See
+[Handle graceful shutdown & signals](how-to/graceful-shutdown.md).
+
+With no other options the controller logs to a discard handler.
 
 ## Step 2 — Register a service
 
@@ -87,8 +95,8 @@ control goroutines, then returns. `Wait` is where your `main` parks.
 
 ## Step 4 — Shut down with Ctrl-C
 
-Because we did not pass `WithoutSignals`, the controller is already listening
-for `SIGINT` and `SIGTERM`. Pressing Ctrl-C:
+Because we passed `WithSignals`, the controller is listening for `SIGINT` and
+`SIGTERM`. Pressing Ctrl-C:
 
 1. delivers `SIGINT`, which the signal handler turns into a `Stop`;
 2. cancels the controller context, so the ticker's `<-ctx.Done()` fires and its
@@ -111,7 +119,7 @@ import (
 )
 
 func main() {
-	c := controls.NewController(context.Background())
+	c := controls.NewController(context.Background(), controls.WithSignals())
 
 	c.Register("ticker",
 		controls.WithStart(func(ctx context.Context) error {

@@ -26,7 +26,6 @@ func newQuietController(t *testing.T, opts ...controls.ControllerOpt) *controls.
 	t.Helper()
 
 	base := []controls.ControllerOpt{
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	}
 	base = append(base, opts...)
@@ -45,7 +44,6 @@ func TestErrorHandler_NoBusySpinAfterStop(t *testing.T) {
 	defer cancel()
 
 	c := controls.NewController(ctx,
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
 	c.Register("svc",
@@ -228,16 +226,16 @@ func TestNilFuncs_NoPanic(t *testing.T) {
 	assert.True(t, c.IsStopped())
 }
 
-// TestSignals_WithoutSignals verifies D6: WithoutSignals leaves the signal channel
-// nil so SIGINT/SIGTERM keep their default disposition (no Notify registered).
-func TestSignals_WithoutSignals(t *testing.T) {
+// TestSignals_DefaultLeavesDisposition verifies spec 0001 D2: the controller
+// installs no handler by default, so SIGINT/SIGTERM keep their default
+// disposition and the outermost layer stays the sole signal owner.
+func TestSignals_DefaultLeavesDisposition(t *testing.T) {
 	t.Parallel()
 
 	c := controls.NewController(context.Background(),
-		controls.WithoutSignals(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
 	)
-	assert.Nil(t, c.Signals(), "WithoutSignals must leave the signal channel nil")
+	assert.Nil(t, c.Signals(), "NewController must leave the signal channel nil")
 }
 
 // TestSignals_CustomChannelReceives verifies a custom channel via SetSignalsChannel
