@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.2.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.2.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.1.4...v0.2.0)
+
+### Features
+
+- **controls**: single-owner signal handling and deterministic shutdown cause ([bd332b7](https://gitlab.com/phpboyscout/go/controls/-/commit/bd332b7db26ea84a0c3a78ccea898da13e6cfa7a))
+
 ## [v0.1.4](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.1.4)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.1.3...v0.1.4)
