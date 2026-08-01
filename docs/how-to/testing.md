@@ -96,11 +96,21 @@ only needs part of it — it makes the dependency (and the mock) smaller:
 
 | Interface | Use when your code only needs to… |
 |---|---|
-| `Runner` | `Start`, `Stop`, `Wait`, and query `IsRunning`/`IsStopped`/`IsStopping` |
-| `StateAccessor` | read/set the lifecycle `State` |
-| `Configurable` | apply configuration (logger, timeout, channels) |
-| `ChannelProvider` | access the message/health/error/signal channels |
-| `HealthReporter` | read `Status()` / `Liveness()` / `Readiness()` reports |
+| `Runner` | `Start`, `Stop`, `Register` services, and query `IsRunning`/`IsStopped`/`IsStopping` |
+| `StateAccessor` | read/set the lifecycle `State`, or read the context or logger |
+| `Configurable` | apply configuration (logger, shutdown timeout, wait group, channels) |
+| `ChannelProvider` | access the message, error and signal channels |
+| `HealthReporter` | read `Status()` / `Liveness()` / `Readiness()` reports, or `GetServiceInfo` |
+
+> [!important]
+> **`Wait` and `WaitContext` are on the concrete `*Controller`, not on any
+> interface** — including `Controllable`. Code that has to block until shutdown
+> completes therefore cannot take `Controllable` alone; accept
+> `*controls.Controller`, or declare a one-method interface of your own:
+>
+> ```go
+> type waiter interface{ Wait() }
+> ```
 
 Reserve the concrete `*controls.Controller` for production wiring; reach for the
 interfaces at test seams.
