@@ -39,7 +39,7 @@ It is opt-in because signal disposition is process-global. If you are building o
 a CLI framework that already turns signals into context cancellation — go-tool-base
 does — leave it off and let the framework cancel the context you pass in; the
 controller shuts down just the same. See
-[Handle graceful shutdown & signals](how-to/graceful-shutdown.md).
+[Handle graceful shutdown & signals](../how-to/graceful-shutdown.md).
 
 With no other options the controller logs to a discard handler.
 
@@ -174,14 +174,18 @@ block on.
 The program prints a `tick` line every second. On Ctrl-C it prints
 `ticker stopping`, then `shutdown complete`, and exits promptly. If it hangs on
 shutdown, a `WithStop` is ignoring its context — see
-[Handle graceful shutdown & signals](how-to/graceful-shutdown.md).
+[Handle graceful shutdown & signals](../how-to/graceful-shutdown.md).
 
 ## Next steps
 
 - Register several services and control their ordering:
-  [Register & run services](how-to/register-services.md).
+  [Register & run services](../how-to/register-services.md).
 - Report health to an HTTP or gRPC endpoint:
-  [Add health checks](how-to/health-checks.md).
-- Make a service self-healing: [Configure restart policy](how-to/restart-policy.md).
+  [Add health checks](../how-to/health-checks.md).
+- Make a service self-healing: [Configure restart policy](../how-to/restart-policy.md).
 - Understand the lifecycle state machine:
-  [Architecture](explanation/architecture.md).
+  [Architecture](../explanation/architecture.md).
+- Look up an option, a field or a default:
+  [Reference](../reference/index.md).
+- Check whether something you need is supported at all:
+  [What controls does not do](../explanation/limitations.md).

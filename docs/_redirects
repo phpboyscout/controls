@@ -1,0 +1,16 @@
+# Redirects for pages that have moved.
+#
+# Format: <from-path> <to-path> <status>. GitLab Pages reads this file from the
+# root of the published site; zensical copies anything in docs/ that is not a
+# page (this file included) to the site root verbatim, so it lands at
+# https://controls.go.phpboyscout.uk/_redirects.
+#
+# Zensical has no redirects plugin — it implements search, offline, mike and
+# mkdocstrings only — so this file is the mechanism. Keep an entry here for the
+# lifetime of any URL that was ever published; other projects' docs and blog
+# posts link to these paths.
+
+# The getting-started walkthrough moved into the tutorials tier (Diátaxis).
+/getting-started /tutorials/getting-started/ 301
+/getting-started/ /tutorials/getting-started/ 301
+/getting-started/index.html /tutorials/getting-started/ 301
