@@ -38,8 +38,14 @@ type RestartPolicy struct {
   `InitialBackoff`, capped at `MaxBackoff`. A zero field selects its default
   (1s / 30s).
 - **`MaxRestarts`.** Caps **consecutive** failures (see below), not lifetime
-  restarts. When exceeded, the supervisor gives up on the service and forwards a
-  `max restarts exceeded` error. `0` means unlimited.
+  restarts. It counts *restarts*, so `MaxRestarts: 5` lets the service run six
+  times in all. When exceeded, the supervisor gives up on the service and
+  forwards a `max restarts exceeded` error — wrapping the last `StartFunc` error
+  when there was one. `0` means unlimited.
+- **The controller keeps running either way.** Giving up on a service does not
+  stop the process or the other services; the error is recorded on
+  `ServiceInfo.Error`, forwarded on the error channel and logged. If a dead
+  service should take the process down, watch for it and call `Stop()` yourself.
 
 ## Health-driven restarts
 
@@ -69,6 +75,13 @@ increments a counter; a single success resets it. When the counter reaches
 > **`HealthFailureThreshold` requires a `Status` probe.** Health monitoring only
 > runs when both `HealthFailureThreshold > 0` and a `WithStatus` func are
 > present. Without them, a clean-start service simply runs until shutdown.
+
+> **Which restart path calls `WithStop`.** A health-threshold restart stops the
+> service first: `WithStop` runs before each restart, and again at shutdown, so
+> it must be idempotent. An **error**-triggered restart does not call `WithStop`
+> at all — the `StartFunc` has already returned, and the supervisor goes straight
+> to the backoff wait. Release resources on the way out of your `StartFunc` if
+> the error path needs cleaning up.
 
 ## Consecutive failures and the reset window
 
@@ -124,5 +137,7 @@ fmt.Printf("restarts=%d lastErr=%v\n", info.RestartCount, info.Error)
 
 - [The restart supervisor](../explanation/restart-supervisor.md) — the run-outcome
   classification and why a clean start is never restarted.
+- [Services and restart policy reference](../reference/services.md) — every field
+  with its default, and what a zero value selects.
 - [Add health checks](health-checks.md) — the `WithStatus` probe the health
   threshold depends on.

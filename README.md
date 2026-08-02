@@ -17,9 +17,10 @@
 
 `gitlab.com/phpboyscout/go/controls` — a small **service-lifecycle supervisor**
 for long-running Go processes. Register your services (HTTP/gRPC servers,
-background workers, schedulers), and the `Controller` orchestrates their startup
-ordering, monitors their health (liveness/readiness), forwards OS signals, and
-drives a bounded graceful shutdown in reverse registration order — with an
+background workers, schedulers), and the `Controller` starts them concurrently,
+monitors their health (liveness/readiness), optionally takes ownership of
+`SIGINT`/`SIGTERM`, and drives a bounded graceful shutdown in reverse
+registration order — with an
 optional self-healing restart policy. The shutdown bound covers stop callbacks
 *and* supervisor exit: a context-ignoring stop — or a start that never returns —
 is abandoned (and named in a WARN) at the deadline rather than wedging shutdown.
@@ -70,10 +71,13 @@ func main() {
 		}),
 	)
 
-	c.Start() // registers SIGINT/SIGTERM handlers by default
-	c.Wait()  // blocks until a signal (or Stop) drains the shutdown sequence
+	c.Start() // launches the services and returns; installs no signal handler
+	c.Wait()  // blocks until Stop (or the parent context) drains the shutdown sequence
 }
 ```
+
+No OS signal handler is installed unless you pass `controls.WithSignals()` —
+signal disposition is process-global, so it belongs to the outermost layer.
 
 ## Key concepts
 

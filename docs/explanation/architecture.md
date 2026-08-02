@@ -63,14 +63,16 @@ The three lifecycle methods relate like this:
 
 ## The control goroutines
 
-`Start` launches three long-lived control goroutines (via an internal
-`controls()` step) alongside the per-service supervisors:
+`Start` launches the long-lived control goroutines (via an internal `controls()`
+step) alongside the per-service supervisors. There are three when signals are
+enabled and two otherwise — the signal handler is only launched if `WithSignals`
+supplied a channel:
 
 | Goroutine | Watches | Job |
 |---|---|---|
-| **Signal handler** | the OS-signal channel | first `SIGINT`/`SIGTERM` triggers `Stop`; a second forces the handler to exit |
-| **Error & context handler** | the error channel and `ctx.Done()` | logs forwarded service errors; triggers `Stop` if the context is cancelled from outside |
-| **Message processor** | the message channel | dispatches `Stop` (runs the shutdown sequence) and `Status` messages |
+| **Signal handler** | the OS-signal channel | first `SIGINT`/`SIGTERM` triggers `Stop`; a second forces the handler to exit. Only launched when `WithSignals` supplied a channel |
+| **Error & context handler** | the error channel and the **parent** context's `Done()` | logs forwarded service errors; triggers `Stop` when the context you passed to `NewController` is cancelled or its deadline expires |
+| **Message processor** | the message channel | runs the shutdown sequence when it receives `Stop`, the only control message the package defines |
 
 Each service runs under its own **supervisor** goroutine, which invokes
 `WithStart`, classifies the outcome, applies the restart policy, and forwards
@@ -108,3 +110,6 @@ three is described in [Health, liveness & readiness](health-model.md).
 - [Health, liveness & readiness](health-model.md)
 - [The restart supervisor](restart-supervisor.md)
 - [Concurrency & shutdown correctness](concurrency.md)
+- [What controls does not do](limitations.md)
+- [Controller reference](../reference/controller.md) — every method and its
+  behaviour in each state.

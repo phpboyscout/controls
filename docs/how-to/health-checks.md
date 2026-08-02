@@ -46,15 +46,23 @@ prefer the dedicated `WithLiveness` / `WithReadiness`; the liveness and readines
 reports fall back to `Status` only when the specific probe is absent.
 
 > **Probes must not block.** Each probe runs inline when the report is built. A
-> panic in a probe is recovered and reported as an error rather than crashing the
-> process, but a slow probe stalls the whole report — keep them fast, and apply
-> your own timeout inside the probe if it does I/O.
+> panic in a probe *on this path* is recovered and reported as an error rather
+> than crashing the process, but a slow probe stalls the whole report — keep them
+> fast, and apply your own timeout inside the probe if it does I/O.
+>
+> That recovery is narrower than it looks: a panic inside a standalone
+> `HealthCheck.Check`, or inside a `WithStatus` probe being polled by the restart
+> supervisor, is **not** recovered and takes the process down. Recover inside
+> your own function if the work can panic.
 
 ## Standalone health checks
 
 For dependencies that are not tied to a service lifecycle — a database, a cache,
 a third-party API — register a standalone `HealthCheck`. It must be registered
-before `Start`, and its name must be unique across services and checks.
+before `Start`, and its name must be unique among health checks. Uniqueness is
+*not* checked against service names: a check called `database` alongside a
+service called `database` is accepted, and the report then carries two entries
+with the same `name`. Pick names that do not collide.
 
 ```go
 err := c.RegisterHealthCheck(controls.HealthCheck{
@@ -115,7 +123,8 @@ _ = c.RegisterHealthCheck(controls.HealthCheck{
 function already has it applied.
 
 > **Readiness fails closed before the first async run.** An async check has no
-> cached result until its first interval elapses. For **readiness** — a traffic
+> cached result until its first run finishes; that run starts as soon as the
+> controller does, so the window is usually brief. For **readiness** — a traffic
 > gate — a check with no result yet is reported as **not-ready** (`"ERROR"`,
 > `OverallHealthy: false`) rather than defaulting to OK. This closes the startup
 > window where traffic could be admitted before the check has actually run. The
@@ -124,8 +133,10 @@ function already has it applied.
 
 ### Read a cached check result
 
-`GetCheckResult` returns the latest result for a named check (the `false` return
-means the check is unknown or an async check has not produced a result yet):
+`GetCheckResult` returns the latest result for a named check. The `false` return
+means the check is unknown, or it has not produced a result yet — for an async
+check, before its first run finishes; for a **sync** check, until a report that
+includes it has been built, since a sync check only runs as part of a report:
 
 ```go
 if r, ok := c.GetCheckResult("billing-api"); ok {
@@ -163,5 +174,7 @@ transport — the module only produces the report; you choose how to surface it.
 
 - [Health, liveness & readiness](../explanation/health-model.md) — the model
   behind the three reports and the fail-closed rule.
+- [Health checks and reports reference](../reference/health.md) — every field and
+  default, the report JSON shape, and what happens to each value when it is wrong.
 - [Configure restart policy](restart-policy.md) — how `WithStatus` drives
   health-based restarts.

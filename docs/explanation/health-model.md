@@ -39,9 +39,15 @@ Each report walks two sources and merges them into one `HealthReport`
     - `Status()` calls `WithStatus` only.
 2. **Standalone checks** whose `CheckType` matches the report (see below).
 
-Any probe or check that reports unhealthy flips `OverallHealthy` to `false`. A
-probe panic is recovered and surfaces as an error entry rather than crashing the
-report.
+Any probe or check that reports unhealthy flips `OverallHealthy` to `false`.
+
+A panic in a **service probe** — `WithStatus`, `WithLiveness`, `WithReadiness` —
+called while a report is built is recovered and surfaces as a
+`probe panicked: <value>` error entry rather than crashing the report. That
+recovery does not extend to a standalone `HealthCheck.Check`, nor to a
+`WithStatus` probe polled by the restart supervisor; a panic in either of those
+crashes the process. See
+[What controls does not do](limitations.md#it-does-not-recover-panics-in-your-start-callbacks-or-standalone-checks).
 
 ## Check types decide where a check appears
 
@@ -81,9 +87,11 @@ have stalled and the cache is no longer trusted. A stale entry is reported as
 
 ## Why readiness fails closed
 
-An async check has **no cached result** between registration and its first
-interval run. What should a report say about a check that has not produced a
-result yet?
+An async check has **no cached result** until its first run completes. That run
+begins as soon as the controller starts — the poller does not wait out an
+interval first — so the window is short, but it is real, and a slow first probe
+widens it. What should a report say about a check that has not produced a result
+yet?
 
 The answer depends on the report's purpose:
 
@@ -117,8 +125,19 @@ into the report as:
 upstream) without failing the gate — it carries its `Message` through but leaves
 `OverallHealthy` true.
 
+## What a report does not tell you
+
+A report is the aggregate of the probes you supplied, and nothing more. The
+controller does not inspect whether a service's goroutine is still running, so a
+service with no probe always reports `"OK"` — even after its `StartFunc` has
+returned an error, and even if it was registered after `Start` and therefore
+never ran. If the entry needs to mean "this service is working", give the service
+a probe that checks something real.
+
 ## Related
 
 - [Add health checks](../how-to/health-checks.md) — the practical recipe.
+- [Health checks and reports reference](../reference/health.md) — every field,
+  default and report value.
 - [The restart supervisor](restart-supervisor.md) — how `WithStatus` health drives
   restarts.

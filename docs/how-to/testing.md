@@ -101,6 +101,7 @@ only needs part of it — it makes the dependency (and the mock) smaller:
 | `Configurable` | apply configuration (logger, shutdown timeout, wait group, channels) |
 | `ChannelProvider` | access the message, error and signal channels |
 | `HealthReporter` | read `Status()` / `Liveness()` / `Readiness()` reports, or `GetServiceInfo` |
+| `HealthCheckReporter` | everything in `HealthReporter`, plus `GetCheckResult` for a named check |
 
 > [!important]
 > **`Wait` and `WaitContext` are on the concrete `*Controller`, not on any
@@ -117,6 +118,9 @@ interfaces at test seams.
 
 ## Related
 
+- [Interfaces reference](../reference/interfaces.md) — every interface's methods,
+  and the methods (`Wait`, `WaitContext`, `RegisterHealthCheck`, `WaitGroup`) that
+  are on none of them.
 - [Register & run services](register-services.md)
 - [Add health checks](health-checks.md)
 - [Handle graceful shutdown & signals](graceful-shutdown.md)

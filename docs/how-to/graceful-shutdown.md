@@ -37,6 +37,16 @@ Each `WithStop` receives a context carrying this deadline. A well-behaved stop
 respects it — for example, `http.Server.Shutdown(ctx)` drains in-flight requests
 until the deadline, then returns.
 
+> **Zero is not "use the default".** `WithShutdownTimeout(0)` — or any negative
+> duration — creates a budget that has already expired, so every stop callback is
+> abandoned the instant it is launched and may never run at all. Omit the option
+> if you want the 5s default.
+
+> **A `StopFunc` can run more than once, so make it idempotent.** Shutdown calls
+> it once; a health-threshold restart calls it again before each restart of that
+> service. (An error-triggered restart does *not* call it — see
+> [Configure restart policy](restart-policy.md).)
+
 > **The deadline context is fresh, not the cancelled controller context.** The
 > `ctx` passed to `WithStop` is derived from `context.Background()` with the
 > shutdown timeout — *not* from the already-cancelled controller context. That is
@@ -210,3 +220,6 @@ opted into `WithSignals`. One rule, no exceptions.
   goroutine leaks or busy-spins.
 - [Architecture](../explanation/architecture.md) — the state machine and control
   goroutines behind the sequence above.
+- [Controller reference](../reference/controller.md) — `Stop`, `Wait`,
+  `WaitContext` and every option, including what each does when called in the
+  wrong state.

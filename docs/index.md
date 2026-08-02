@@ -6,9 +6,10 @@ behind one `Controller`, as a light, framework-free library.
 
 `controls` is the same supervisor behind [go-tool-base](https://gitlab.com/phpboyscout/go-tool-base)'s
 service commands, extracted so any project can register its services (HTTP/gRPC
-servers, background workers, schedulers) and let the `Controller` orchestrate
-their startup, monitor their health, forward OS signals, and drive a bounded
-graceful shutdown — **without** pulling in the framework.
+servers, background workers, schedulers) and let the `Controller` start them
+concurrently, monitor their health, optionally take ownership of
+`SIGINT`/`SIGTERM`, and drive a bounded graceful shutdown — **without** pulling
+in the framework.
 
 ```go
 import "gitlab.com/phpboyscout/go/controls"
@@ -65,10 +66,14 @@ func main() {
 		}),
 	)
 
-	c.Start() // registers SIGINT/SIGTERM handlers by default
-	c.Wait()  // blocks until a signal (or Stop) drains the shutdown sequence
+	c.Start() // launches the services and returns; installs no signal handler
+	c.Wait()  // blocks until Stop (or the parent context) drains the shutdown sequence
 }
 ```
+
+Add `controls.WithSignals()` to `NewController` when this process is the
+outermost layer and `Ctrl-C` should stop it — see [Handle graceful shutdown &
+signals](how-to/graceful-shutdown.md#signal-handling).
 
 ## Key concepts
 
@@ -98,8 +103,8 @@ go get gitlab.com/phpboyscout/go/controls
 
 The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
 
-- **[Getting started](getting-started.md)** — a learning-oriented walkthrough:
-  register one service, start it, and shut down cleanly on Ctrl-C.
+- **[Getting started](tutorials/getting-started.md)** — a learning-oriented
+  walkthrough: register one service, start it, and shut down cleanly on Ctrl-C.
 - **How-to guides** — task-oriented recipes:
     - [Register & run services](how-to/register-services.md)
     - [Add health checks](how-to/health-checks.md)
@@ -110,8 +115,18 @@ The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
     - [Health, liveness & readiness](explanation/health-model.md)
     - [The restart supervisor](explanation/restart-supervisor.md)
     - [Concurrency & shutdown correctness](explanation/concurrency.md)
-- **Reference** — the full API, with runnable `Example` tests, lives on
-  [pkg.go.dev](https://pkg.go.dev/gitlab.com/phpboyscout/go/controls).
+    - [What controls does not do](explanation/limitations.md)
+- **[Reference](reference/index.md)** — every option, field and default, with
+  what happens when it is set wrongly:
+    - [Controller](reference/controller.md)
+    - [Services and restart policy](reference/services.md)
+    - [Health checks and reports](reference/health.md)
+    - [Defaults and timings](reference/defaults.md)
+    - [Interfaces](reference/interfaces.md)
+
+    The generated listing of every exported symbol, with runnable `Example`
+    tests, is on
+    [pkg.go.dev](https://pkg.go.dev/gitlab.com/phpboyscout/go/controls).
 
 > **Using go-tool-base?** The framework wires this supervisor into its service
 > commands and exposes the `HealthReport`s through its own `pkg/http` and

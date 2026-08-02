@@ -37,6 +37,18 @@ c.Register("http-api",
 > *clean start*, not an exit — the supervisor keeps the service alive until
 > shutdown. See [The restart supervisor](../explanation/restart-supervisor.md).
 
+## Give every service a distinct name
+
+`Register` takes no error return and does not check names for uniqueness.
+Registering two services as `worker` is accepted: both run, both appear in every
+health report as separate entries named `worker`, and `GetServiceInfo("worker")`
+can only return one of them — the one registered last. Nothing warns you. Use
+distinct names.
+
+The same applies across kinds: a standalone `HealthCheck` may share a name with a
+service, because `RegisterHealthCheck` only checks for collisions among health
+checks.
+
 ## Register several services
 
 Call `Register` once per service, all before `Start`:
@@ -83,6 +95,19 @@ This is useful for a service whose only job is to contribute a probe to the
 aggregate [health report](health-checks.md), or as a placeholder during
 incremental development.
 
+## What happens if you register after Start
+
+`Register` still accepts the service, logs
+`WARN "Register called after Start; service will not be supervised"`, and adds it
+to the collection — but `Start` has already snapshotted the service set and
+launched the supervisor goroutines, so that service's `StartFunc` is never
+called, its `StopFunc` never runs, and no restart policy applies to it.
+
+The trap is that it *does* appear in `Status()`, `Liveness()` and `Readiness()`,
+reporting `"OK"` if it has no probe. A late registration therefore looks healthy
+while doing nothing at all. Treat the warning as a bug in your wiring rather than
+a caution.
+
 ## Inspect a running service
 
 `GetServiceInfo` returns runtime metadata for a registered service — its restart
@@ -98,6 +123,8 @@ if ok {
 ## Related
 
 - [Add health checks](health-checks.md) — attach probes and standalone checks.
+- [Services and restart policy reference](../reference/services.md) — every
+  option, the callback contracts, and every `RestartPolicy` field.
 - [Configure restart policy](restart-policy.md) — make a service self-healing.
 - [Architecture](../explanation/architecture.md) — how the supervisor goroutines
   and the state machine fit together.
