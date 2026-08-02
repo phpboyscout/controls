@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/errors"
+	"gitlab.com/phpboyscout/go/errors"
 )
 
 const (

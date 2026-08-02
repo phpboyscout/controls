@@ -9,13 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	errors "gitlab.com/phpboyscout/go/errors"
 )
 
 // ErrShutdown is the cause attached to the controller context when a graceful
 // shutdown is initiated. Callers can distinguish a controlled stop from an
 // upstream cancellation via context.Cause(ctx) == controls.ErrShutdown.
-var ErrShutdown = errors.New("controller shutdown")
+var ErrShutdown = errors.NewSentinel("controls.shutdown", "controller shutdown")
 
 // DefaultShutdownTimeout is the time allowed for graceful shutdown before
 // services are force-stopped.
