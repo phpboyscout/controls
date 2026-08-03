@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.3.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.3.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.2.0...v0.3.0)
+
+### Features
+
+- adopt gitlab.com/phpboyscout/go/errors ([bdc510c](https://gitlab.com/phpboyscout/go/controls/-/commit/bdc510cc3ca63d096c75bbe85ea9cd2d0f9da176))
+
 ## [v0.2.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.2.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.1.4...v0.2.0)
