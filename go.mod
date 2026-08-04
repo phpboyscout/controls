@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/stretchr/testify v1.11.1
-	gitlab.com/phpboyscout/go/errors v0.1.0
+	gitlab.com/phpboyscout/go/errors v0.2.0
 )
 
 require (
