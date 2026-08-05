@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.3.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.3.1)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.3.0...v0.3.1)
+
+### Bug Fixes
+
+- **deps**: update module gitlab.com/phpboyscout/go/errors to v0.2.0 ([eb167d7](https://gitlab.com/phpboyscout/go/controls/-/commit/eb167d7955de81301f0e32403002cd48c5b64cf6))
+
 ## [v0.3.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.3.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.2.0...v0.3.0)
