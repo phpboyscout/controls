@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.3.2](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.3.2)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.3.1...v0.3.2)
+
+### Bug Fixes
+
+- **deps**: update module github.com/stretchr/testify to v1.12.1 ([7d6c19c](https://gitlab.com/phpboyscout/go/controls/-/commit/7d6c19cfa6b86d1faadbe300947bacd0f3bb0877))
+- **deps**: update go modules ([1d69f79](https://gitlab.com/phpboyscout/go/controls/-/commit/1d69f7963da4c44458b41b72dd52ecc9452259dd))
+- **deps**: require go 1.26.6 for the stdlib advisories ([3708a18](https://gitlab.com/phpboyscout/go/controls/-/commit/3708a187220438a44116835f6159c02449bd0ffb))
+- **ci**: bump the cicd components to v0.36.0 for Go 1.26.6 ([a266993](https://gitlab.com/phpboyscout/go/controls/-/commit/a266993463a21317e3060cfe05ea1d43c4e7aead))
+
 ## [v0.3.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.3.1)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.3.0...v0.3.1)
