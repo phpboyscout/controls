@@ -90,6 +90,36 @@ touches shutdown or restart timing. `just mocks` and `just test-e2e` are inherit
 template recipes with nothing here to run: no mockery config, no `test/e2e/` tree,
 no published mocks, and `enable_e2e: false` in CI.
 
+**Test the wrong-order pairs before the happy path.** Both types here have a
+lifecycle, and the tests that get written walk it forwards: register, start, let
+something fail, stop. The supervisor's pre-merge review found five defects that
+needed no concurrency at all, only a call in an order nothing had tried. `Stop`
+before `Start` hung forever on a `<-c.done` no goroutine would ever close;
+`Detach` before `Start` burned the caller's whole budget and then reported
+`ErrDetachTimeout` for a child that never ran; `Attach` after `Stop` was accepted
+and ran the child against a dead context; `Readiness` reported ready after a
+completed `Stop`. So for any `Start`/`Stop`, `Attach`/`Detach` or `Open`/`Close`
+pair, write the wrong-order case first. Each has a right answer, usually "refuse
+and say which rule was broken", and writing them first is what forces the
+terminal state to be designed rather than inherited from whichever flag was left
+set.
+
+**`-race` finds only what a test actually performs.** It is in `just ci` and it
+was green on the supervisor branch while two genuine races sat in `Stop`, one of
+them on `c.cancel` between `launch` and `stopChild`. The detector was working;
+no test had ever called `Start` and `Stop` concurrently, so the conflicting
+accesses never happened in the same run. A hundred-iteration loop doing exactly
+that flagged it in 0.07s. Anything whose methods may be called concurrently
+needs a test that calls them that way before a green `-race` means anything.
+
+**Mutate the changed code before raising the MR.** The supervisor branch reached
+96.7% coverage, and fourteen separate edits to `supervisor_run.go` left the full
+suite green: deleting the entire backoff `select`, deleting the clean-exit
+branch, inverting `exhausted`'s nil-policy rule, dropping the recover around the
+failure callback. Coverage counts lines that ran, not behaviour anything holds.
+Break the changed code on purpose, one edit at a time, re-run, and treat
+anything still green as untested. See **test-first-discipline**.
+
 ## Which skills apply here
 
 | When | Skill |
@@ -97,6 +127,7 @@ no published mocks, and `enable_e2e: false` in CI.
 | Considering a new dependency (`depfootprint_test.go` holds the veto, and the usual answer is none at all) | `use-the-go-toolkit` |
 | Adding to or widening the public surface, given the deliberately narrow role interfaces and the modules compiled against them | `deep-modules`, `release-train` |
 | Chasing a shutdown, restart or health-timing bug, or a test that only fails sometimes | `diagnose-with-a-red-loop` |
+| Writing tests for anything with a lifecycle, or before raising an MR on a change with new tests | `test-first-discipline` |
 | Adding a test that fakes a service's start, stop or probe (they go through the functional options, never a package-level var) | `race-safe-test-injection` |
 | Writing a doc comment or a docs page here, where the prose is checked against the tests | `checkable-claims`, `diataxis-docs` |
 | Before `glab mr create` on this repo | `verify-before-pr` |
