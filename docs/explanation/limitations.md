@@ -55,6 +55,7 @@ Panic recovery is deliberately partial, and the boundaries are not symmetrical:
 | `WithStop` | recovered; shutdown continues with the next service |
 | `WithStatus` / `WithLiveness` / `WithReadiness`, called while a report is built | recovered; reported as `probe panicked: <value>` |
 | `WithStart` | **not recovered — the process crashes** |
+| `Child.Start`, run by a `Supervisor` | recovered; counted, and fed to the restart policy |
 | `WithStatus`, polled by the restart supervisor | **not recovered — the process crashes** |
 | `HealthCheck.Check` | **not recovered — the process crashes** |
 
@@ -67,7 +68,10 @@ Stopped` once; calling `Start()` on a `Stopped` controller logs a warning and
 does nothing. To run services again, construct a new controller.
 
 Nor can it be reconfigured mid-flight. Services and health checks must be
-registered before `Start`; there is no deregistration for either. The `SetX`
+registered before `Start`; there is no deregistration for either. A
+[`Supervisor`](../how-to/supervise-dynamic-children.md) is the answer when the
+set has to change: its children attach and detach at any time, and detaching is
+the deregistration a `Controller` does not have. The `SetX`
 setters exist for construction — they mutate fields the control goroutines read
 without synchronisation, so calling one on a running controller is a race, not a
 supported reconfiguration path.

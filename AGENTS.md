@@ -118,3 +118,27 @@ no published mocks, and `enable_e2e: false` in CI.
   removes a public interface is `feat`, not `refactor`, or it never ships.
 - No AI attribution in anything published, and never at-mention anyone.
 - Never cut a release yourself. That is the maintainer's call, every time.
+
+## Controller and Supervisor
+
+`Controller` manages a **fixed** set registered before `Start`, stopped in reverse registration
+order. `Supervisor` manages a set that **changes**, stopped concurrently. Spec 0002.
+
+**Registered means required; attached does not.** A registered service whose probe fails sets
+`OverallHealthy: false` for the whole process (`services.go`, `readiness`). `Supervisor.Readiness`
+must therefore **never** fail because a child failed — a Supervisor is registered with a Controller,
+so one dead child would otherwise take the process out of rotation through that registration. A
+failed child is reported as `CheckDegraded` and delivered to the consumer as a `Failure`.
+
+**`RestartPolicy` is shared, and its rules are shared.** `MaxRestarts <= 0` means **unlimited**, for
+a `Child` exactly as for a `Service`. The first draft of the supervisor read it as *never* — same
+field, opposite meaning, both visible from one screen. `TestSupervisorAndServiceRestartAlike` guards
+it.
+
+**A child's `Start` is recovered; a service's is not.** Deliberate asymmetry: a child is
+caller-supplied code the supervisor launched, so the same line `callStop` and `callProbe` already
+draw applies. A panic is still a defect — counted separately from an error return.
+
+**Failure notification runs on its own goroutine.** Not for throughput: it keeps failures ordered and
+means a callback calling `Detach` on the child that just died cannot deadlock against a lock held
+while notifying.

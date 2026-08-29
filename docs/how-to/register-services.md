@@ -108,6 +108,11 @@ reporting `"OK"` if it has no probe. A late registration therefore looks healthy
 while doing nothing at all. Treat the warning as a bug in your wiring rather than
 a caution.
 
+**If you genuinely need a set that changes while the process runs**, that is what
+a [`Supervisor`](supervise-dynamic-children.md) is for. A `Controller` manages a
+fixed set with ordered shutdown; a `Supervisor` manages a changing one. They are
+two sides of one coin and a process usually wants both.
+
 ## Inspect a running service
 
 `GetServiceInfo` returns runtime metadata for a registered service — its restart
