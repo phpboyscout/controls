@@ -28,7 +28,31 @@ type healthCheckEntry struct {
 // recorded and the abandoned check goroutine is left to finish on its own,
 // matching the StopFunc-abandonment policy (D11). The done channel is buffered
 // so that late send never blocks the abandoned goroutine.
+//
+// A cancelled PARENT is not a timeout, and saying so is the whole of the extra
+// care below. The controller's own context is what reaches here from
+// healthCheckStatuses, and shutdown cancels it, so every check used to be
+// recorded as "health check timed out" however fast it returned: ctx.Done() was
+// already closed, both arms of the select were ready, and Go picks between ready
+// cases at random. The message was false, nondeterministic, and indistinguishable
+// from the real timeout it exists to report.
+//
+// Every path below is deterministic, which is half the fix. A caller that runs
+// this twice in the same conditions gets the same answer twice.
 func (e *healthCheckEntry) runCheck(parentCtx context.Context) {
+	// Already cancelled on entry: report that, and do not invoke the check at
+	// all. Deterministic, which the alternative is not — starting a goroutine
+	// whose result may or may not arrive before an already-closed Done channel
+	// is read gives two different answers for the same call. It also spares the
+	// consumer's check from being handed a context that is dead on arrival.
+	if parentCtx.Err() != nil {
+		result := cancelledResult()
+		result.Timestamp = time.Now()
+		e.lastResult.Store(&result)
+
+		return
+	}
+
 	timeout := e.check.Timeout
 	if timeout == 0 {
 		timeout = defaultCheckTimeout
@@ -48,14 +72,47 @@ func (e *healthCheckEntry) runCheck(parentCtx context.Context) {
 	select {
 	case result = <-done:
 	case <-ctx.Done():
-		result = CheckResult{
-			Status:  CheckUnhealthy,
-			Message: "health check timed out",
-		}
+		// A late answer is not admissible. Once we have stopped waiting, taking
+		// the check's result if it happens to have arrived first is a race with
+		// two different outcomes for the same call, and it would report a check
+		// that blew its deadline as healthy on whichever runs win it.
+		result = timedOutOrCancelled(parentCtx)
 	}
 
 	result.Timestamp = time.Now()
 	e.lastResult.Store(&result)
+}
+
+// timedOutOrCancelled names why a check produced no result, distinguishing the
+// check overrunning its own deadline from the caller's context being cancelled
+// out from under it.
+//
+// Both are unhealthy: a check with no result cannot say a dependency is well,
+// and readiness fails closed on exactly that (D11). What differs is the
+// diagnosis, and a message naming the wrong cause sends an operator looking for
+// a slow dependency that was never there.
+func timedOutOrCancelled(parentCtx context.Context) CheckResult {
+	if parentCtx.Err() != nil {
+		return cancelledResult()
+	}
+
+	return CheckResult{
+		Status:  CheckUnhealthy,
+		Message: "health check timed out",
+	}
+}
+
+// cancelledResult is what a check reports when its caller's context went away.
+//
+// Unhealthy, because a check with no result cannot say a dependency is well and
+// readiness fails closed on exactly that (D11). The message names the cause,
+// which is the half that was wrong: an operator reading "timed out" during a
+// shutdown investigation looks for a slow dependency that was never there.
+func cancelledResult() CheckResult {
+	return CheckResult{
+		Status:  CheckUnhealthy,
+		Message: "health check cancelled: the controller is shutting down",
+	}
 }
 
 // stale reports whether an async cached result is older than

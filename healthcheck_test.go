@@ -393,8 +393,9 @@ func TestAsyncCheck_ContextCancelledOnStop(t *testing.T) {
 	t.Parallel()
 
 	unblocked := make(chan struct{})
+	running := make(chan struct{})
 
-	var once sync.Once
+	var startOnce, once sync.Once
 
 	c := controls.NewController(context.Background(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)),
@@ -403,6 +404,7 @@ func TestAsyncCheck_ContextCancelledOnStop(t *testing.T) {
 	require.NoError(t, c.RegisterHealthCheck(controls.HealthCheck{
 		Name: "ctx-check",
 		Check: func(ctx context.Context) controls.CheckResult {
+			startOnce.Do(func() { close(running) })
 			<-ctx.Done()
 			once.Do(func() { close(unblocked) })
 
@@ -417,6 +419,16 @@ func TestAsyncCheck_ContextCancelledOnStop(t *testing.T) {
 	}))
 
 	c.Start()
+
+	// Wait until the check is genuinely in flight before stopping. Without this
+	// the test can pass on a check invoked AFTER cancellation, which observes an
+	// already-dead context rather than the cancellation doing anything, and
+	// runCheck no longer invokes a check whose parent is dead on arrival.
+	select {
+	case <-running:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the check never ran, so the cancellation below would prove nothing")
+	}
 
 	c.Stop()
 	c.Wait()

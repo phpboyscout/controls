@@ -115,9 +115,14 @@ func TestAsyncCheck_WedgedRefreshFlipsReadiness(t *testing.T) {
 
 	c.Start()
 
-	// First async run caches a healthy result.
+	// First async run caches a healthy result. Wait for the RESULT, not the call:
+	// calls.Add(1) happens at the top of the check and runCheck stores the result
+	// after it returns, so waiting on the counter leaves a window where readiness
+	// is still failing closed on an absent result. That flaked 2 runs in 40.
 	require.Eventually(t, func() bool {
-		return calls.Load() >= 1
+		_, ok := c.GetCheckResult("wedged-async")
+
+		return ok
 	}, 2*time.Second, 5*time.Millisecond)
 
 	require.True(t, c.Readiness().OverallHealthy, "readiness healthy right after first async run")
