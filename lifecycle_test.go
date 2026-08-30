@@ -37,9 +37,20 @@ func newQuietController(t *testing.T, opts ...controls.ControllerOpt) *controls.
 // the error/context handler goroutine must exit (not spin on a permanently-ready
 // ctx.Done() case). We assert the goroutine count returns to baseline and stays
 // bounded for an idle second.
+//
+// # It must not call t.Parallel()
+//
+// runtime.NumGoroutine is process-global, and the handler goroutine is not in
+// the controller's wait group, so a global count is the only instrument that can
+// see it. Run in parallel, that count includes every other test's goroutines and
+// the assertion cannot tell a leak here from another test being busy — nor,
+// symmetrically, would it catch a real leak masked by another test finishing.
+// It flaked on exactly that.
+//
+// A Go test that does not call t.Parallel() runs while every parallel test in
+// the package is paused, so the count means what it says. Adding t.Parallel()
+// here to match the tests around it would silently break this.
 func TestErrorHandler_NoBusySpinAfterStop(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -61,7 +72,12 @@ func TestErrorHandler_NoBusySpinAfterStop(t *testing.T) {
 		return c.GetState() == controls.Stopped
 	}, 5*time.Second, 10*time.Millisecond)
 
-	c.Wait()
+	// Bounded, so a controller that never finishes shutting down fails here
+	// saying so rather than hanging until the binary timeout.
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer waitCancel()
+
+	require.NoError(t, c.WaitContext(waitCtx), "shutdown did not complete")
 
 	// Allow goroutines to unwind, then confirm we have not leaked the handler
 	// goroutines and that the count is stable (not climbing from a spin spawning

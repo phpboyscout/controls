@@ -25,8 +25,15 @@ import (
 // reader, so SIGINT is swallowed and the child never exits.
 func TestSignalsNotSwallowedBeforeStart(t *testing.T) {
 	if os.Getenv("CONTROLS_SIGNAL_CHILD") == "1" {
-		// Child process: construct a controller with signals enabled, never Start.
-		controls.NewController(context.Background())
+		// Child process: construct a controller WITH SIGNALS ENABLED, never Start.
+		//
+		// WithSignals is what makes this test able to fail. Signals are opt-in:
+		// without it c.signals is nil, startSignalHandler returns immediately,
+		// signal.Notify is never called by any path, and SIGINT keeps its default
+		// disposition no matter what the constructor does. The child then
+		// terminates, the parent sees it terminate, and the test passes against
+		// the bug it exists to catch.
+		controls.NewController(context.Background(), controls.WithSignals())
 		time.Sleep(30 * time.Second) // block; SIGINT should terminate us
 
 		return
