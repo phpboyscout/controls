@@ -127,9 +127,15 @@ func TestWaitContext_ConcurrentCallersRace(t *testing.T) {
 // spanning a full shutdown) is near-unreachable in practice, but a regression to
 // an unguarded blocking send would accumulate leaked goroutines across the
 // iterations and fail the post-settle goroutine-count check.
+//
+// # It must not call t.Parallel()
+//
+// runtime.NumGoroutine is process-global. Run in parallel, the count includes
+// every other test's goroutines, so the assertion cannot tell a leak here from
+// another test being busy, and symmetrically a real leak can hide behind another
+// test finishing. A Go test that does not call t.Parallel() runs while every
+// parallel test in the package is paused, so the count means what it says.
 func TestSupervise_ErrorForwardDoesNotLeakOnShutdown(t *testing.T) {
-	t.Parallel()
-
 	before := runtime.NumGoroutine()
 
 	for iter := 0; iter < 40; iter++ {

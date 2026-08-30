@@ -132,9 +132,15 @@ func TestWaitContext_StuckStartFuncReturnsDeadlineExceeded(t *testing.T) {
 // TestWaitContext_CleanDrainReturnsNil verifies the clean path: with
 // context-respecting services WaitContext returns nil and, per the existing
 // leak guards, the controller goroutines unwind to baseline.
+//
+// # It must not call t.Parallel()
+//
+// runtime.NumGoroutine is process-global. Run in parallel, the count includes
+// every other test's goroutines, so the assertion cannot tell a leak here from
+// another test being busy, and symmetrically a real leak can hide behind another
+// test finishing. A Go test that does not call t.Parallel() runs while every
+// parallel test in the package is paused, so the count means what it says.
 func TestWaitContext_CleanDrainReturnsNil(t *testing.T) {
-	t.Parallel()
-
 	before := runtime.NumGoroutine()
 
 	c := newQuietController(t)
