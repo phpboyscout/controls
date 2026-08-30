@@ -31,18 +31,33 @@ import (
 //
 // A Supervisor is itself a Service: register it with a Controller and its
 // children are supervised beneath it.
+//
+// # Single use, and what each call does out of order
+//
+// A Supervisor moves through new, running, stopping and stopped, and never goes
+// back. Once shutdown begins, [Supervisor.Attach] and [Supervisor.Start] return
+// [ErrSupervisorStopped] and [Supervisor.Readiness] reports it, rather than
+// accepting work that will never be supervised.
+//
+// [Supervisor.Stop] and [Supervisor.Detach] are bounded by the context they are
+// given, including across a [Child.Stop] that blocks. A child that outlives the
+// budget is abandoned rather than allowed to hold shutdown open, which is the
+// same bargain [Controller] strikes at its own shutdown deadline.
 type Supervisor struct {
 	mu       sync.Mutex
 	children map[string]*supervisedChild
 	order    []string
 
+	state   supState
 	ctx     context.Context //nolint:containedctx // Start's context, needed to launch children attached later.
 	cancel  context.CancelFunc
-	started bool
+	stopped chan struct{}
 
 	onFailure   func(Failure)
-	dispatch    chan Failure
-	dispatchWG  sync.WaitGroup
+	queue       []Failure
+	queueWake   chan struct{}
+	queueClosed bool
+
 	failures    chan Failure
 	failuresOn  bool
 	droppedRpts atomic.Int64
@@ -50,10 +65,35 @@ type Supervisor struct {
 	wg sync.WaitGroup
 }
 
+// supState is the supervisor's lifecycle. It is ordered, and compared with >=,
+// so a new state must be inserted in the position its transitions belong.
+type supState int
+
+const (
+	supNew supState = iota
+	supRunning
+	supStopping
+	supStopped
+)
+
 type supervisedChild struct {
 	spec   Child
-	cancel context.CancelFunc
-	done   chan struct{}
+	policy *RestartPolicy
+
+	// cancel and launched are guarded by the SUPERVISOR's mutex, not the
+	// child's: they are written by launch, which runs under it, and read by
+	// Stop and Detach deciding what there is to wait for.
+	cancel   context.CancelFunc
+	launched bool
+
+	done chan struct{}
+
+	// stopOnce guarantees one shutdown per child however many paths reach it.
+	// Detach racing Stop would otherwise call a caller's Stop twice, and most
+	// close a channel or dispose a resource, so the second call panics into a
+	// recover that reports nothing.
+	stopOnce sync.Once
+	stopDone chan struct{}
 
 	mu       sync.Mutex
 	state    ChildState
@@ -68,11 +108,18 @@ type SupervisorOption func(*Supervisor)
 // WithOnFailure registers a callback for a child that has exhausted its restart
 // policy.
 //
-// It runs on a dedicated dispatch goroutine, behind a recover. That buys three
-// things: a slow callback cannot stall supervision, failures arrive in order,
-// and a callback that calls back into the supervisor — Detach on the child that
-// just died is the obvious thing to write — cannot deadlock against a lock held
-// while notifying.
+// It runs on a dedicated dispatch goroutine, behind a recover, from an ordered
+// queue. That buys three things: a slow callback cannot stall supervision,
+// failures arrive in order, and none is lost while the callback is busy. The
+// queue is unbounded because a terminal failure is rare by construction — a
+// child reaches one only after exhausting its restart policy — and because a
+// callback is not opt-in the way [Supervisor.Failures] is, so shedding from it
+// would lose notifications a consumer never agreed to lose.
+//
+// A callback may call back into the supervisor, including [Supervisor.Stop].
+// Nothing is held while it runs, and Stop does not wait for the dispatch
+// goroutine: a callback still executing when Stop returns runs to completion,
+// and the goroutine exits once the queue drains.
 //
 // The callback returns nothing. A consumer that wants the supervisor to act
 // calls its API; an instruction returned from a notification would make the
@@ -83,7 +130,10 @@ func WithOnFailure(fn func(Failure)) SupervisorOption {
 
 // NewSupervisor returns a supervisor with no children.
 func NewSupervisor(opts ...SupervisorOption) *Supervisor {
-	s := &Supervisor{children: map[string]*supervisedChild{}}
+	s := &Supervisor{
+		children: map[string]*supervisedChild{},
+		stopped:  make(chan struct{}),
+	}
 
 	for _, o := range opts {
 		o(s)
@@ -100,6 +150,10 @@ func NewSupervisor(opts ...SupervisorOption) *Supervisor {
 // fill; a consumer that does is expected to drain it, and sends that would block
 // are dropped and counted rather than stalling the supervisor. See
 // [Supervisor.DroppedReports].
+//
+// It is never closed. Ranging over it does not terminate at shutdown, so a
+// consumer that wants a loop to end should select on it alongside its own done
+// channel.
 func (s *Supervisor) Failures() <-chan Failure {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,12 +166,13 @@ func (s *Supervisor) Failures() <-chan Failure {
 	return s.failures
 }
 
-// DroppedReports is how many failure notifications could not be delivered to
-// the channel because it was full.
+// DroppedReports is how many failures could not be delivered to the channel
+// returned by [Supervisor.Failures] because it was full.
 //
-// It should be zero. A drop nobody counts is indistinguishable from a system
-// with nothing to report, which is the failure this whole type is arranged to
-// avoid.
+// It should be zero, and it counts that channel alone: the callback registered
+// by [WithOnFailure] has its own unbounded queue and loses nothing. A drop
+// nobody counts is indistinguishable from a system with nothing to report,
+// which is the failure this whole type is arranged to avoid.
 func (s *Supervisor) DroppedReports() int64 { return s.droppedRpts.Load() }
 
 // Attach adds a child, before or after [Supervisor.Start].
@@ -125,6 +180,8 @@ func (s *Supervisor) DroppedReports() int64 { return s.droppedRpts.Load() }
 // Attaching after Start is the point of this type: a Controller cannot do it,
 // and says so — a late registration there "is never started, monitored, or
 // stopped". A child attached here is supervised identically whenever it arrives.
+//
+// Once shutdown has begun it returns [ErrSupervisorStopped].
 func (s *Supervisor) Attach(c Child) error {
 	if c.Name == "" {
 		return errors.New("controls: a child needs a name")
@@ -137,15 +194,25 @@ func (s *Supervisor) Attach(c Child) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.state >= supStopping {
+		return errors.Wrapf(ErrSupervisorStopped, "attaching %q", c.Name)
+	}
+
 	if _, ok := s.children[c.Name]; ok {
 		return errors.Wrapf(ErrChildAttached, "%q", c.Name)
 	}
 
-	child := &supervisedChild{spec: c, done: make(chan struct{}), state: ChildStopped}
+	child := &supervisedChild{
+		spec:     c,
+		policy:   copyRestartPolicy(c.RestartPolicy),
+		done:     make(chan struct{}),
+		stopDone: make(chan struct{}),
+		state:    ChildPending,
+	}
 	s.children[c.Name] = child
 	s.order = append(s.order, c.Name)
 
-	if s.started {
+	if s.state == supRunning {
 		// The supervisor's own context is the right parent: a child's lifetime
 		// belongs to the supervisor, not to whoever happened to attach it.
 		s.launch(s.ctx, child) //nolint:contextcheck // s.ctx is derived from Start's ctx; Attach has no caller context to inherit.
@@ -156,10 +223,15 @@ func (s *Supervisor) Attach(c Child) error {
 
 // Detach stops one child and forgets it. Every other child is untouched.
 //
-// It waits for the child to stop, bounded by ctx. If the budget expires the
-// child is still forgotten and [ErrDetachTimeout] is returned, so a caller
-// learns that a goroutine outlived its detach rather than discovering it later
-// as a leak nothing reports.
+// It waits for the child to stop, bounded by ctx across both the child's own
+// goroutine and its [Child.Stop]. If the budget expires the child is still
+// forgotten and [ErrDetachTimeout] is returned, so a caller learns that a
+// goroutine outlived its detach rather than discovering it later as a leak
+// nothing reports.
+//
+// Detaching a child the supervisor never started is immediate and returns nil.
+// Its Start was never called, so there is nothing to stop and nothing to wait
+// for, and reporting a timeout for it would be a lie about what happened.
 func (s *Supervisor) Detach(ctx context.Context, name string) error {
 	s.mu.Lock()
 	child, ok := s.children[name]
@@ -168,10 +240,16 @@ func (s *Supervisor) Detach(ctx context.Context, name string) error {
 		delete(s.children, name)
 		s.order = removeName(s.order, name)
 	}
+
+	launched := ok && child.launched
 	s.mu.Unlock()
 
 	if !ok {
 		return errors.Wrapf(ErrChildNotAttached, "%q", name)
+	}
+
+	if !launched {
+		return nil
 	}
 
 	s.stopChild(ctx, child)
@@ -188,26 +266,29 @@ func (s *Supervisor) Detach(ctx context.Context, name string) error {
 // a Controller like any other service.
 //
 // It returns once children are launched; the supervisor serves in the
-// background from then on.
+// background from then on. A Supervisor is single use: after Stop it returns
+// [ErrSupervisorStopped] rather than starting again.
 func (s *Supervisor) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.started {
+	switch s.state {
+	case supRunning:
 		return errors.New("controls: the supervisor is already started")
+	case supStopping, supStopped:
+		return ErrSupervisorStopped
+	case supNew:
 	}
 
 	sctx, cancel := context.WithCancel(ctx)
 	s.ctx, s.cancel = sctx, cancel
-	s.started = true
+	s.state = supRunning
 
-	s.dispatch = make(chan Failure, DefaultFailureBufferSize)
-	s.dispatchWG.Add(1)
+	if s.onFailure != nil {
+		s.queueWake = make(chan struct{}, 1)
 
-	// The channel is passed in rather than read from the field inside the
-	// goroutine: closeDispatch nils the field, and a goroutine reading it is a
-	// data race the detector finds immediately.
-	go s.dispatchLoop(s.dispatch)
+		go s.dispatchLoop()
+	}
 
 	for _, name := range s.order {
 		s.launch(sctx, s.children[name])
@@ -216,23 +297,27 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels every child at once and waits for all of them.
+// Stop cancels every child at once and waits for all of them, bounded by ctx.
 //
 // Concurrent, not ordered: shutdown is bounded by the slowest child rather than
 // by their number. Ten children taking 100ms each stop in about 100ms, where
 // one at a time would take a second. The price is that children must not depend
 // on each other — a consumer whose units do wants a Controller, which provides
 // reverse-registration ordering deliberately.
+//
+// A child that outlives ctx is abandoned, the same bargain a Controller strikes
+// at its shutdown deadline, because a stop that cannot end is worse than one
+// that reports an incomplete result. [Supervisor.Health] still lists it.
+//
+// Calling Stop before Start stops nothing: no child's Start was called, so
+// there is nothing to cancel and no [Child.Stop] to run. A second Stop waits
+// for the first to finish rather than reporting a completion that has not
+// happened.
 func (s *Supervisor) Stop(ctx context.Context) {
-	s.mu.Lock()
-	kids := make([]*supervisedChild, 0, len(s.children))
-
-	for _, c := range s.children {
-		kids = append(kids, c)
+	kids, mine := s.beginStop(ctx)
+	if !mine {
+		return
 	}
-
-	cancel := s.cancel
-	s.mu.Unlock()
 
 	var wg sync.WaitGroup
 
@@ -243,43 +328,155 @@ func (s *Supervisor) Stop(ctx context.Context) {
 			defer wg.Done()
 
 			s.stopChild(ctx, c)
-			<-c.done
+
+			select {
+			case <-c.done:
+			case <-ctx.Done():
+			}
 		}(c)
 	}
 
-	wg.Wait()
+	awaitBounded(ctx, wg.Wait)
+	awaitBounded(ctx, s.wg.Wait)
 
-	if cancel != nil {
-		cancel()
-	}
+	s.closeQueue()
 
-	s.wg.Wait()
-	s.closeDispatch()
+	s.mu.Lock()
+	s.state = supStopped
+	close(s.stopped)
+	s.mu.Unlock()
 }
 
-// stopChild cancels a child and calls its Stop, if it has one.
-func (s *Supervisor) stopChild(ctx context.Context, c *supervisedChild) {
-	if c.cancel != nil {
-		c.cancel()
+// beginStop claims the shutdown under the lock and reports whether this caller
+// owns it. A caller that does not own it has already waited for the one that
+// does, or had nothing to stop.
+//
+// The state transition and the snapshot happen in one critical section, which is
+// what stops Attach adding a child the snapshot has already missed, and what
+// makes every wg.Add strictly before the Wait below. Cancellation happens here
+// too, so every child sees shutdown at once rather than in whatever order the
+// per-child goroutines are scheduled.
+func (s *Supervisor) beginStop(ctx context.Context) (kids []*supervisedChild, mine bool) {
+	s.mu.Lock()
+
+	switch s.state {
+	case supStopped:
+		s.mu.Unlock()
+
+		return nil, false
+
+	case supStopping:
+		done := s.stopped
+		s.mu.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+
+		return nil, false
+
+	case supNew:
+		// Nothing was ever launched, so there is nothing to wait on. Waiting on
+		// a child's done channel here would block for ever: only the goroutine
+		// launch spawns closes it, and none was spawned.
+		s.state = supStopped
+		close(s.stopped)
+		s.mu.Unlock()
+
+		return nil, false
+
+	case supRunning:
 	}
 
-	if c.spec.Stop != nil {
-		callStop(ctx, c.spec.Stop)
+	s.state = supStopping
+	kids = make([]*supervisedChild, 0, len(s.children))
+
+	for _, c := range s.children {
+		if c.launched {
+			kids = append(kids, c)
+		}
+	}
+
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+
+	return kids, true
+}
+
+// awaitBounded runs wait on its own goroutine and returns when it finishes or
+// ctx expires, whichever comes first. An abandoned wait is left to finish on its
+// own, as Services.stop does at the controller's shutdown deadline.
+func awaitBounded(ctx context.Context, wait func()) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		wait()
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+// stopChild cancels a child and calls its Stop, once however many callers reach
+// it, and returns when that has finished or ctx expires.
+func (s *Supervisor) stopChild(ctx context.Context, c *supervisedChild) {
+	c.stopOnce.Do(func() {
+		s.mu.Lock()
+		cancel := c.cancel
+		s.mu.Unlock()
+
+		if cancel != nil {
+			cancel()
+		}
+
+		if c.spec.Stop == nil {
+			close(c.stopDone)
+
+			return
+		}
+
+		// A caller's Stop that blocks must not outlast the caller's budget, so
+		// it runs on its own goroutine and the wait below is what ctx bounds.
+		go func() {
+			defer close(c.stopDone)
+
+			callStop(ctx, c.spec.Stop)
+		}()
+	})
+
+	select {
+	case <-c.stopDone:
+	case <-ctx.Done():
 	}
 }
 
 // launch starts one child's supervision goroutine. The lock must be held, and
 // parent is the supervisor's own context — taken as a parameter rather than
 // read from the field so the flow is visible at every call site.
+//
+// wg.Add happens here, under the lock, and Stop transitions to stopping under
+// the same lock before it waits. Attach refuses once stopping has begun, so an
+// Add can never race the Wait.
 func (s *Supervisor) launch(parent context.Context, c *supervisedChild) {
 	ctx, cancel := context.WithCancel(parent)
 	c.cancel = cancel
+	c.launched = true
 
 	s.wg.Add(1)
 
 	go func() {
 		defer s.wg.Done()
 		defer close(c.done)
+		// Without this, a child that ends on its own leaves a cancelCtx
+		// registered against the supervisor's context for the process lifetime.
+		defer cancel()
 
 		s.supervise(ctx, c)
 	}()
@@ -287,19 +484,19 @@ func (s *Supervisor) launch(parent context.Context, c *supervisedChild) {
 
 // supervise runs one child until it is cancelled or exhausts its policy.
 //
-// The backoff arithmetic is the Services machinery — resolveRestartTimings,
-// calculateNextBackoff and the reset-interval rule — rather than a second
-// implementation of it. What differs is where a failure goes: a Service sends
-// on the controller's error channel, a child produces a Failure for the
-// consumer.
+// The restart machinery is the Services machinery — classifyOutcome,
+// restartsExhausted, resolveRestartTimings, calculateNextBackoff and the
+// reset-interval rule — rather than a second implementation of it. What differs
+// is where a failure goes: a Service sends on the controller's error channel, a
+// child produces a Failure for the consumer.
 func (s *Supervisor) supervise(ctx context.Context, c *supervisedChild) {
 	// A nil policy means no restarts at all, and cannot be expressed through the
 	// Service rule below — that reads MaxRestarts <= 0 as unlimited, so no value
 	// of it means "never". Hence an explicit flag rather than a sentinel value
 	// that would have to lie.
-	noRestart := c.spec.RestartPolicy == nil
+	noRestart := c.policy == nil
 
-	policy := c.spec.RestartPolicy
+	policy := c.policy
 	if policy == nil {
 		policy = &RestartPolicy{}
 	}
@@ -313,26 +510,25 @@ func (s *Supervisor) supervise(ctx context.Context, c *supervisedChild) {
 		runStarted := time.Now()
 		err, panicked := s.runChildOnce(ctx, c)
 
-		if ctx.Err() != nil {
+		// Recorded before the outcome is classified. A child that panics on its
+		// way out during shutdown classifies as cancelled, and recording after
+		// that check threw the panic away — the half a consumer most wants.
+		if err != nil {
+			c.record(err, panicked)
+		}
+
+		if outcome := classifyOutcome(ctx, err, nil); outcome != outcomeError {
 			c.setState(ChildStopped)
 
 			return
 		}
-
-		if err == nil {
-			c.setState(ChildStopped)
-
-			return
-		}
-
-		c.record(err, panicked)
 
 		if time.Since(runStarted) >= timings.resetInterval {
 			restarts = 0
 			timings.backoff = initialBackoff(policy)
 		}
 
-		if exhausted(noRestart, policy, restarts) {
+		if noRestart || restartsExhausted(policy, restarts) {
 			s.fail(c, restarts, err, panicked)
 
 			return
@@ -340,6 +536,7 @@ func (s *Supervisor) supervise(ctx context.Context, c *supervisedChild) {
 
 		restarts++
 		c.setRestarts(restarts)
+		c.setState(ChildBackoff)
 
 		select {
 		case <-time.After(timings.backoff):
@@ -350,20 +547,6 @@ func (s *Supervisor) supervise(ctx context.Context, c *supervisedChild) {
 			return
 		}
 	}
-}
-
-// exhausted reports whether a child has used up its restart allowance.
-//
-// The same rule a Service uses (services.go:345): MaxRestarts <= 0 means
-// UNLIMITED, not none. Writing it the other way round is precisely the
-// divergence sharing RestartPolicy exists to prevent, and the first draft of
-// this loop had it.
-func exhausted(noRestart bool, policy *RestartPolicy, restarts int) bool {
-	if noRestart {
-		return true
-	}
-
-	return policy.MaxRestarts > 0 && restarts >= policy.MaxRestarts
 }
 
 // runChildOnce calls the child's Start and converts a panic into an error.
@@ -396,7 +579,6 @@ func (s *Supervisor) fail(c *supervisedChild, restarts int, err error, panicked 
 
 	s.mu.Lock()
 	ch, on := s.failures, s.failuresOn
-	dispatch := s.dispatch
 	s.mu.Unlock()
 
 	if on {
@@ -407,42 +589,97 @@ func (s *Supervisor) fail(c *supervisedChild, restarts int, err error, panicked 
 		}
 	}
 
-	if dispatch != nil {
-		select {
-		case dispatch <- f:
-		default:
-			s.droppedRpts.Add(1)
-		}
+	if s.onFailure != nil {
+		s.enqueue(f)
 	}
 }
 
-// dispatchLoop delivers failures to the callback, one at a time and in order.
-func (s *Supervisor) dispatchLoop(ch <-chan Failure) {
-	defer s.dispatchWG.Done()
+// enqueue adds a failure to the callback's ordered queue and wakes the dispatch
+// goroutine. It never blocks the caller, which is a supervision goroutine.
+func (s *Supervisor) enqueue(f Failure) {
+	s.mu.Lock()
 
-	for f := range ch {
-		if s.onFailure == nil {
+	if s.queueClosed {
+		s.mu.Unlock()
+
+		return
+	}
+
+	s.queue = append(s.queue, f)
+	wake := s.queueWake
+	s.mu.Unlock()
+
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// dispatchLoop delivers failures to the callback, one at a time and in order,
+// until the queue is closed and drained.
+//
+// Nothing joins this goroutine. Stop closing the queue is what ends it, and a
+// callback that calls Stop would otherwise be waiting for itself.
+func (s *Supervisor) dispatchLoop() {
+	for {
+		s.mu.Lock()
+
+		if len(s.queue) == 0 {
+			closed, wake := s.queueClosed, s.queueWake
+			s.mu.Unlock()
+
+			if closed {
+				return
+			}
+
+			<-wake
+
 			continue
 		}
 
-		func() {
-			defer func() { _ = recover() }()
+		f := s.queue[0]
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
 
-			s.onFailure(f)
-		}()
+		s.invoke(f)
 	}
 }
 
-func (s *Supervisor) closeDispatch() {
+// invoke calls the consumer's callback behind a recover, so a panic in it kills
+// neither the dispatch goroutine nor the process.
+func (s *Supervisor) invoke(f Failure) {
+	defer func() { _ = recover() }()
+
+	s.onFailure(f)
+}
+
+func (s *Supervisor) closeQueue() {
 	s.mu.Lock()
-	d := s.dispatch
-	s.dispatch = nil
+	s.queueClosed = true
+	wake := s.queueWake
 	s.mu.Unlock()
 
-	if d != nil {
-		close(d)
-		s.dispatchWG.Wait()
+	if wake == nil {
+		return
 	}
+
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// copyRestartPolicy takes the caller's policy by value, as WithRestartPolicy
+// does for a Service, so a caller reusing its struct cannot change a running
+// child's rules underneath it. Nil is preserved: it is the never-restart marker.
+func copyRestartPolicy(p *RestartPolicy) *RestartPolicy {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+
+	return &c
 }
 
 func removeName(names []string, name string) []string {

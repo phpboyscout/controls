@@ -82,6 +82,14 @@ func (q *Services) add(s Service) {
 // predicate (if set) exempts expected terminal errors (e.g. http.ErrServerClosed)
 // from being treated as failures.
 func (q *Services) classifyRun(ctx context.Context, err error) runOutcome {
+	return classifyOutcome(ctx, err, q.validError)
+}
+
+// classifyOutcome is the rule itself, with no receiver, so a Supervisor's
+// children read it rather than reimplementing it. Note the second clause: a
+// returned context.Canceled counts as a cancellation even when ctx is still
+// live, because a unit that reports itself cancelled is not failing.
+func classifyOutcome(ctx context.Context, err error, valid ValidErrorFunc) runOutcome {
 	if err == nil {
 		return outcomeCleanStart
 	}
@@ -90,11 +98,20 @@ func (q *Services) classifyRun(ctx context.Context, err error) runOutcome {
 		return outcomeCancelled
 	}
 
-	if q.validError != nil && q.validError(err) {
+	if valid != nil && valid(err) {
 		return outcomeCancelled
 	}
 
 	return outcomeError
+}
+
+// restartsExhausted reports whether a unit has used up its restart allowance.
+//
+// MaxRestarts <= 0 means UNLIMITED, not none. Writing it the other way round is
+// precisely the divergence sharing RestartPolicy exists to prevent, and the
+// first draft of the supervisor's loop had it. One copy, two callers.
+func restartsExhausted(policy *RestartPolicy, restarts int) bool {
+	return policy.MaxRestarts > 0 && restarts >= policy.MaxRestarts
 }
 
 // monitorHealth supervises a background-serving service via its Status probe. It
@@ -342,7 +359,7 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs c
 		}
 
 		// Check if we've exhausted restarts.
-		if srv.RestartPolicy.MaxRestarts > 0 && restarts >= srv.RestartPolicy.MaxRestarts {
+		if restartsExhausted(srv.RestartPolicy, restarts) {
 			finalErr := errors.New("max restarts exceeded")
 			if err != nil {
 				finalErr = errors.Wrap(err, "max restarts exceeded")

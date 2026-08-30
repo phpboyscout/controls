@@ -41,12 +41,21 @@ func (s *Supervisor) Health() map[string]ChildStatus {
 // A failed child is reported by [Supervisor.HealthCheck] as DEGRADED, which is
 // visible to an operator and inert to a probe, and delivered to the consumer as
 // a [Failure] to judge.
+//
+// What it does fail on is the supervisor's own lifecycle:
+// [ErrSupervisorNotStarted] before Start and [ErrSupervisorStopped] once
+// shutdown has begun. A stopped supervisor reporting ready is the same boundary
+// failing in the other direction.
 func (s *Supervisor) Readiness() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.started {
+	switch s.state {
+	case supNew:
 		return ErrSupervisorNotStarted
+	case supStopping, supStopped:
+		return ErrSupervisorStopped
+	case supRunning:
 	}
 
 	return nil

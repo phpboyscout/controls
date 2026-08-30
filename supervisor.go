@@ -15,6 +15,14 @@ const DefaultFailureBufferSize = 16
 var ErrSupervisorNotStarted = errors.NewSentinel("controls.supervisor_not_started",
 	"controls: the supervisor has not started")
 
+// ErrSupervisorStopped is returned once shutdown has begun, by [Supervisor.Attach],
+// [Supervisor.Start] and [Supervisor.Readiness].
+//
+// A Supervisor is single-use. Accepting a child it will never supervise is worse
+// than refusing one, because the caller goes away believing it is running.
+var ErrSupervisorStopped = errors.NewSentinel("controls.supervisor_stopped",
+	"controls: the supervisor has stopped")
+
 // ErrChildAttached is returned when a name is already in use.
 var ErrChildAttached = errors.NewSentinel("controls.child_attached",
 	"controls: a child is already attached under that name")
@@ -52,11 +60,20 @@ type Child struct {
 	// RestartPolicy governs restarts. Nil means never restart: the child runs
 	// once and its outcome is final.
 	//
-	// A non-nil policy follows a Service's rules exactly, including that
-	// MaxRestarts <= 0 means UNLIMITED rather than none. The same type is used
-	// deliberately: a caller should configure restart behaviour one way whether
-	// the thing being restarted is registered or attached, and two rules with
-	// the same fields is the divergence nobody notices until they disagree.
+	// The restart rules are a Service's rules, read through the same helpers,
+	// including that MaxRestarts <= 0 means UNLIMITED rather than none. The same
+	// type is used deliberately: a caller should configure restart behaviour one
+	// way whether the thing being restarted is registered or attached, and two
+	// rules with the same fields is the divergence nobody notices until they
+	// disagree.
+	//
+	// Two of the type's fields are inert here. HealthFailureThreshold and
+	// HealthCheckInterval drive a Service's health-based restarts through its
+	// Status probe, and a Child has no probe to read. Setting them changes
+	// nothing rather than failing, which is why it is said here.
+	//
+	// The value is copied at [Supervisor.Attach], so a caller may reuse or edit
+	// its policy struct afterwards without racing the supervision goroutine.
 	RestartPolicy *RestartPolicy
 }
 
@@ -64,8 +81,17 @@ type Child struct {
 type ChildState string
 
 const (
+	// ChildPending means the child is attached and its Start has not been called,
+	// because the supervisor has not started yet.
+	ChildPending ChildState = "pending"
+
 	// ChildRunning means the child's Start has not returned.
 	ChildRunning ChildState = "running"
+
+	// ChildBackoff means the child failed and is waiting out its restart backoff.
+	// Reporting it as running would describe a dead child as a live one for as
+	// long as MaxBackoff.
+	ChildBackoff ChildState = "backoff"
 
 	// ChildFailed means the child exhausted its restart policy.
 	ChildFailed ChildState = "failed"
