@@ -52,6 +52,8 @@ When the controller shuts down it cancels the shared context, which unblocks
 context-derived error. Restarting a service *because the controller asked it to
 stop* would be a bug, so a cancelled run never restarts.
 
+A supervised `Child` carries the same predicate as its own `ValidError` field.
+
 `WithValidError` extends the same courtesy to expected terminal errors that are
 not context errors — most importantly `http.ErrServerClosed`, which
 `ListenAndServe` returns after a graceful `Shutdown`. A matching error is

@@ -85,6 +85,7 @@ type Child struct {
     Name          string
     Start         StartFunc
     Stop          StopFunc
+    ValidError    ValidErrorFunc
     RestartPolicy *RestartPolicy
 }
 ```
@@ -96,6 +97,7 @@ type Child struct {
 - **`Stop`** is optional. Cancelling the context passed to `Start` is the primary
   mechanism. It runs behind a `recover` and **exactly once**, however many of
   `Detach` and `Stop` reach the same child.
+- **`ValidError`** is optional. See the table below for what it changes.
 - **`RestartPolicy`** is the same type a service uses, read through the same
   helpers, and is **copied at `Attach`** so you may reuse or edit your struct
   afterwards. `nil` means never restart. `MaxRestarts <= 0` means **unlimited**,
@@ -114,8 +116,21 @@ type Child struct {
 | any other error | a failure: recorded, counted against the policy, restarted or reported terminal |
 | a panic | converted to an error, counted separately in `ChildStatus.Panics` and flagged in `Failure.Panicked` |
 
-A `Controller`'s `WithValidError` has no child equivalent. A child wrapping an
-HTTP server sees `http.ErrServerClosed` as an ordinary error.
+**`ValidError` is a child's own `WithValidError`.** A predicate that accepts an
+error makes it a clean stop: no restart, no `Failure`, exactly as a `Controller`'s
+`WithValidError` does for a service. It is per child rather than per supervisor,
+because a supervisor may hold children of very different kinds and one predicate
+for all of them is the wrong unit. Nil means no error is exempt.
+
+```go
+sup.Attach(controls.Child{
+    Name:  "api",
+    Start: srv.Run,
+    ValidError: func(err error) bool {
+        return errors.Is(err, http.ErrServerClosed)
+    },
+})
+```
 
 ## `ChildState` and `ChildStatus`
 

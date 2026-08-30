@@ -48,7 +48,7 @@ time: 1s, 2s, 4s, 8s, 16s, 30s, 30s, … Because each run is far shorter than th
 
 | Setting | Default when zero | Notes |
 |---|---|---|
-| `HealthCheck.Timeout` | **5s** | Bounds one run of `Check`; on expiry the run records `"health check timed out"`. |
+| `HealthCheck.Timeout` | **5s** | Bounds one run of `Check`; on expiry the run records `"health check timed out"`, and a late answer is not accepted. A run whose caller context was already cancelled records `"health check cancelled: the controller is shutting down"` instead, without invoking `Check`. |
 | `HealthCheck.Interval` | **0 — synchronous** | Runs inline on every report that includes the check. |
 | `HealthCheck.Type` | `CheckTypeReadiness` | Appears in `Readiness()` and `Status()`. |
 | Async staleness bound | **3 × `Interval`** | Fixed; an older cached result is reported `"ERROR"` with `cached health result is stale`. |
@@ -61,6 +61,7 @@ time: 1s, 2s, 4s, 8s, 16s, 30s, 30s, … Because each run is far shorter than th
 | `Failures()` channel | not created | calling `Failures()` | A consumer that never calls it never has a queue filling behind it. Created on first call, bounded at `DefaultFailureBufferSize` = **16**, and never closed. |
 | Failure callback queue | unbounded, ordered | `WithOnFailure(fn)` | Without the option no queue exists and no goroutine runs. |
 | `Child.RestartPolicy` | `nil` — run once, outcome final | the field | `nil` is **never restart**. A non-nil policy with `MaxRestarts <= 0` is **unlimited**, the opposite reading. |
+| `Child.ValidError` | `nil` — no error is exempt | the field | The child equivalent of a controller's `WithValidError`, per child rather than per supervisor. |
 | `Child.Stop` | no-op | the field | Cancelling the context passed to `Start` is the primary mechanism; `Stop` is the extra one. |
 | `Stop` / `Detach` budget | the context you pass | — | `context.Background()` is an unbounded budget. A child that ignores cancellation then holds the call open until it returns. |
 

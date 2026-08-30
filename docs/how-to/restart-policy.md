@@ -132,6 +132,19 @@ c := controls.NewController(ctx,
 predicate applies to every service. Contrast it with the per-service restart
 options above, which are `ServiceOption`s passed to `Register`.
 
+A supervised `Child` declares its own, as a `ValidError` field rather than an
+option, so children of different kinds can exempt different errors:
+
+```go
+sup.Attach(controls.Child{
+    Name:  "api",
+    Start: srv.Run,
+    ValidError: func(err error) bool {
+        return errors.Is(err, http.ErrServerClosed)
+    },
+})
+```
+
 ## Observe restart counts
 
 ```go

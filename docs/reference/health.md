@@ -54,7 +54,15 @@ interval. During that window `Readiness()` reports it as not-ready and
 Every run, sync or async, is executed in its own goroutine and raced against the
 timeout. A `Check` that ignores its context cannot hang a report or wedge the
 poller: at expiry the run records `CheckResult{Status: CheckUnhealthy, Message:
-"health check timed out"}` and the abandoned goroutine is left to finish alone.
+"health check timed out"}` and the abandoned goroutine is left to finish alone. A
+late answer is not accepted; once the run has stopped waiting, the timeout stands.
+
+**A cancelled caller is not a timeout.** If the controller's context has already
+been cancelled the check is not invoked at all and the run records
+`"health check cancelled: the controller is shutting down"`. Still `CheckUnhealthy`,
+because a check with no result cannot say a dependency is well, but the message
+names the real cause: an operator reading "timed out" during a shutdown looks for
+a slow dependency that was never there.
 
 **A panic inside `Check` is not recovered and crashes the process.** Service
 probes are wrapped; standalone checks are not. Recover inside your own `Check`
@@ -143,10 +151,12 @@ a service's goroutine is running. A service with no probe always reports `"OK"`
 registered after `Start` that was never started at all. If you need the report to
 reflect that a service is alive, give it a probe that checks something real.
 
-Calling a report method **after** shutdown has completed re-runs every
-synchronous check against the cancelled controller context, so each one records
-`"ERROR"` with `health check timed out`. Read the reports while the controller is
-running.
+Calling a report method **after** shutdown has completed does not re-run the
+checks: the controller context is cancelled, so each one records `"ERROR"` with
+`health check cancelled: the controller is shutting down` without the consumer's
+`Check` being invoked. Read the reports while the controller is running; since
+readiness is gated on the lifecycle state, a report taken later says little
+beyond the state itself.
 
 ## Related
 
