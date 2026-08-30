@@ -57,6 +57,16 @@ type Child struct {
 	// optional: cancelling the context passed to Start is the primary mechanism.
 	Stop StopFunc
 
+	// ValidError identifies errors that mean a clean stop rather than a failure,
+	// http.ErrServerClosed being the case it exists for. An error it accepts ends
+	// the child without a restart and without a [Failure], exactly as a
+	// [Controller]'s WithValidError does for a Service.
+	//
+	// Per child rather than per supervisor, because a supervisor may hold children
+	// of very different kinds and one predicate for all of them is the wrong unit.
+	// Nil means no error is exempt.
+	ValidError ValidErrorFunc
+
 	// RestartPolicy governs restarts. Nil means never restart: the child runs
 	// once and its outcome is final.
 	//
@@ -71,6 +81,9 @@ type Child struct {
 	// HealthCheckInterval drive a Service's health-based restarts through its
 	// Status probe, and a Child has no probe to read. Setting them changes
 	// nothing rather than failing, which is why it is said here.
+	//
+	// An expected terminal error is [Child.ValidError] rather than a policy field,
+	// matching where a Service declares it.
 	//
 	// The value is copied at [Supervisor.Attach], so a caller may reuse or edit
 	// its policy struct afterwards without racing the supervision goroutine.

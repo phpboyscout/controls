@@ -489,6 +489,9 @@ func (s *Supervisor) launch(parent context.Context, c *supervisedChild) {
 // reset-interval rule — rather than a second implementation of it. What differs
 // is where a failure goes: a Service sends on the controller's error channel, a
 // child produces a Failure for the consumer.
+//
+// classifyOutcome takes the child's own ValidError, so an expected terminal
+// error means the same thing here as it does for a registered service.
 func (s *Supervisor) supervise(ctx context.Context, c *supervisedChild) {
 	// A nil policy means no restarts at all, and cannot be expressed through the
 	// Service rule below — that reads MaxRestarts <= 0 as unlimited, so no value
@@ -517,7 +520,7 @@ func (s *Supervisor) supervise(ctx context.Context, c *supervisedChild) {
 			c.record(err, panicked)
 		}
 
-		if outcome := classifyOutcome(ctx, err, nil); outcome != outcomeError {
+		if outcome := classifyOutcome(ctx, err, c.spec.ValidError); outcome != outcomeError {
 			c.setState(ChildStopped)
 
 			return
