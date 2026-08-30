@@ -33,6 +33,26 @@ func within(t *testing.T, d time.Duration, what string, fn func()) {
 	}
 }
 
+// awaitTrue polls until cond holds or the budget expires, and fails saying what
+// it was waiting for. Polling rather than sleeping-then-asserting is what stops
+// a test racing state it has not been told is ready yet.
+func awaitTrue(t *testing.T, d time.Duration, what string, cond func() bool) bool {
+	t.Helper()
+
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	t.Errorf("timed out after %s waiting for %s", d, what)
+
+	return false
+}
+
 // TestSupervisorStopBeforeStart — Stop must not wait on a child whose
 // supervision goroutine was never launched, because nothing will ever close its
 // done channel.

@@ -447,17 +447,10 @@ func TestSupervisorEndedChildReleasesItsContext(t *testing.T) {
 		t.Fatal("the child never ran")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if s.Health()["doomed"].State == controls.ChildFailed {
-			break
-		}
-
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	if st := s.Health()["doomed"].State; st != controls.ChildFailed {
-		t.Fatalf("state = %s, want failed", st)
+	if !awaitTrue(t, 2*time.Second, "the child to reach failed", func() bool {
+		return s.Health()["doomed"].State == controls.ChildFailed
+	}) {
+		return
 	}
 
 	// The supervisor is still running, so nothing else has cancelled it.
@@ -465,9 +458,13 @@ func TestSupervisorEndedChildReleasesItsContext(t *testing.T) {
 		t.Fatalf("Readiness = %v; the supervisor stopped and the assertion below would be meaningless", err)
 	}
 
-	if childCtx.Err() == nil {
-		t.Error("the child ended and its context is still live; the cancelCtx is registered against the supervisor's for good")
-	}
+	// Poll rather than assert once. setState(ChildFailed) happens inside fail(),
+	// and the deferred cancel() runs when supervise RETURNS, so the state is
+	// observable a moment before the context is released. Asserting on sight of
+	// the state flaked about one run in fifteen under -race.
+	awaitTrue(t, 2*time.Second,
+		"the ended child's context to be released; a cancelCtx registered against the supervisor's is a leak",
+		func() bool { return childCtx.Err() != nil })
 
 	s.Stop(t.Context())
 }
