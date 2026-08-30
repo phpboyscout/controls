@@ -122,6 +122,36 @@ failure callback. Coverage counts lines that ran, not behaviour anything holds.
 Break the changed code on purpose, one edit at a time, re-run, and treat
 anything still green as untested. See **test-first-discipline**.
 
+## The lifecycle state is load-bearing for health
+
+`Readiness()` is true **only while `Running`** (spec 0003 D2), stated positively so a state added
+later is unready by default. `Liveness()` is deliberately not gated the same way: a liveness failure
+during a graceful shutdown invites the orchestrator to kill a correct drain. `go/transport` maps
+`OverallHealthy` straight onto HTTP 200/503 and gRPC SERVING/NOT_SERVING, so a change to the verdict
+is a change to what every service in the estate puts on the wire without any of them changing a
+line.
+
+**`Unknown` is not "constructed but not started".** That is `NeverStarted`, and it is what the
+registration guards check. `Unknown` means the state could not be determined, which `GetState`
+returns for a `Controller` built without `NewController` — `State` is a string type, so such a
+controller holds `""`, otherwise undetectable.
+
+**`UnableToStart` needs both halves.** A registered service that has never started cleanly *and* has
+exhausted its restart policy. One without the other is an ordinary failure: a service that fails at
+boot and recovers on a restart is what restart policies are for, and tripping on the first error
+would flap readiness through a slow boot. `markStarted` in `services.go` cannot be used for the
+"started cleanly" half, whatever its name suggests: it is a `wg.Done` guard fired by a `defer` on
+every exit, including a failing one.
+
+**`Stop` must transition from `UnableToStart` as well as `Running`** (`beginShutdown`). Forgetting it
+is quiet and bad: `Stop` refuses, and the services that *are* running are never told to stop.
+
+**`SetState` is public on purpose, and the docs said otherwise three times.** `StateAccessor` is
+meant to be consumed and implemented outside this module, so a consumer driving a controller it owns
+needs the setter. Its own doc comment said "read access", `docs/reference/interfaces.md` routed
+readers to it for reading, and `docs/reference/controller.md` said it existed "for fakes". A review
+proposed removing it on exactly that reading. Spec 0003 D7 records why it stays.
+
 ## Which skills apply here
 
 | When | Skill |

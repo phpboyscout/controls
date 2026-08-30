@@ -2,8 +2,8 @@
 
 This page explains how `controls` is put together: the `Controller` at the
 centre, the `Services` collection it supervises, the control goroutines that
-carry messages, errors, and signals, and the four-state lifecycle that ties them
-together.
+carry messages, errors, and signals, and the lifecycle state machine that ties
+them together.
 
 ## The controller and the services collection
 
@@ -22,29 +22,49 @@ Both must happen before `Start`.
 
 ## The lifecycle state machine
 
-The controller moves through four states, held under a mutex and mutated only by
+The controller moves through these states, held under a mutex and mutated only by
 guarded compare-and-set transitions:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Unknown : NewController
-    Unknown --> Running : Start (CAS)
+    [*] --> NeverStarted : NewController
+    NeverStarted --> NeverStarted : Stop (no-op)
+    NeverStarted --> Running : Start (CAS)
+    Running --> UnableToStart : a required service will never start
     Running --> Stopping : Stop / signal / ctx cancel
+    UnableToStart --> Stopping : Stop / signal / ctx cancel
     Stopping --> Stopped : all WithStop complete
     Stopped --> [*] : Wait returns
 ```
 
-- **`Unknown`** — constructed but not started. The only state in which
-  registration is honoured.
+- **`NeverStarted`** — constructed but not started. The only state in which
+  registration is honoured. A `Stop` here is a no-op, so the controller stays
+  startable.
 - **`Running`** — `Start` has launched the supervisor and control goroutines.
+  The only state in which the controller reports **ready**.
+- **`UnableToStart`** — a registered service has failed without ever starting
+  cleanly and has exhausted its restart policy, so it will never start. Nothing
+  is stopped and the error still reaches the error channel; what changes is that
+  readiness goes false, so an orchestrator routes no traffic to a process that
+  cannot do its job.
 - **`Stopping`** — a shutdown has been initiated; stop callbacks are running.
 - **`Stopped`** — the shutdown sequence has completed.
 
+**`Unknown` is not part of that sequence.** It means the state could not be
+determined, and `GetState` returns it for a `Controller` built without
+`NewController`: `State` is a string type, so such a controller holds the empty
+string, which would otherwise be undetectable.
+
 The transitions are **compare-and-set** operations. `Start` only proceeds if it
-can move `Unknown → Running`; a second `Start` finds the state is no longer
-`Unknown` and returns. `Stop` only proceeds on `Running → Stopping`. This is what
-makes `Start` and `Stop` idempotent (see
-[Concurrency & shutdown correctness](concurrency.md)).
+can move `NeverStarted → Running`; a second `Start` finds the state is no longer
+`NeverStarted` and returns. `Stop` proceeds from `Running` **or**
+`UnableToStart`, because a controller that cannot serve is still a live process
+whose working services need stopping. This is what makes `Start` and `Stop`
+idempotent (see [Concurrency & shutdown correctness](concurrency.md)).
+
+The state is decided by wiki spec
+[0003](https://gitlab.com/phpboyscout/go/controls/-/wikis/specs/0003-the-lifecycle-state-should-reach-the-health-reports),
+which also records why readiness is gated on it and liveness is not.
 
 ## Start, Stop, and Wait
 

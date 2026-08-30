@@ -11,13 +11,15 @@ the module can be trusted as the backbone of a long-running process.
 `Start` and `Stop` are driven by **compare-and-set** state transitions taken
 under a mutex:
 
-- `Start` only proceeds if it can move the state `Unknown → Running`. A second
-  (or concurrent) `Start` observes a non-`Unknown` state and returns without
-  launching anything — so services are never double-started and the wait group
-  is never double-counted.
-- `Stop` only proceeds on `Running → Stopping`. Duplicate `Stop` calls, or a
-  `Stop` racing a signal-driven shutdown, collapse into a single shutdown
-  sequence.
+- `Start` only proceeds if it can move the state `NeverStarted → Running`. A
+  second (or concurrent) `Start` observes a non-`NeverStarted` state and returns
+  without launching anything — so services are never double-started and the wait
+  group is never double-counted.
+- `Stop` proceeds from `Running` **or** `UnableToStart`, in both cases by CAS to
+  `Stopping`. Duplicate `Stop` calls, or a `Stop` racing a signal-driven
+  shutdown, collapse into a single shutdown sequence. `UnableToStart` is in that
+  set deliberately: a controller that cannot serve is still a live process whose
+  working services need stopping.
 
 This makes both methods safe to call from multiple goroutines and safe to call
 more than once — a real concern when a signal, a parent-context cancel, and an

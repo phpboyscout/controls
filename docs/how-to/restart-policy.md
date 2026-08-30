@@ -46,6 +46,12 @@ type RestartPolicy struct {
   stop the process or the other services; the error is recorded on
   `ServiceInfo.Error`, forwarded on the error channel and logged. If a dead
   service should take the process down, watch for it and call `Stop()` yourself.
+- **But readiness goes false if the service never started at all.** Giving up on
+  a service that never once started cleanly means it never will, so the
+  controller moves to `UnableToStart` and reports unready. An orchestrator then
+  routes no traffic to it and restarts the pod, which is usually what you want
+  and needs no code from you. A service that started and failed later does not
+  trip this, and neither does one that fails once and recovers.
 
 ## Health-driven restarts
 

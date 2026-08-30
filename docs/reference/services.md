@@ -129,6 +129,15 @@ That error is stored on `ServiceInfo.Error` and forwarded on the error channel.
 with no policy at all — never shuts the process down; the controller stops only
 on `Stop()`, a signal it owns, or completion of the parent context.
 
+**What it does change is readiness, but only if the service never started.** A
+service that has never started cleanly and has exhausted its policy will never
+start, so the controller moves to `UnableToStart` and stops reporting ready. With
+no policy at all that is the first genuine error, since there are no retries. A
+service that *did* start cleanly and failed later is an ordinary failure however
+many restarts it then used up, and so is one that fails once and recovers on a
+restart: both conditions are required. Nothing is stopped either way. See
+[the health model](../explanation/health-model.md).
+
 ## ServiceInfo
 
 ```go

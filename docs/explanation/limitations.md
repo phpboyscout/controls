@@ -63,9 +63,14 @@ Recover inside your own function wherever the work can panic.
 
 ## It cannot be restarted, and it cannot be reconfigured while running
 
-A controller is single-use. The lifecycle runs `Unknown → Running → Stopping →
-Stopped` once; calling `Start()` on a `Stopped` controller logs a warning and
-does nothing. To run services again, construct a new controller.
+A controller is single-use. The lifecycle runs `NeverStarted → Running →
+Stopping → Stopped` once, with an optional `Running → UnableToStart → Stopping`
+branch when a registered service proves it will never start; calling `Start()`
+on a `Stopped` controller logs a warning and does nothing. To run services
+again, construct a new controller.
+
+A `Stop` before any `Start` is the one exception: it is a no-op, leaves the state
+at `NeverStarted`, and the controller stays startable.
 
 Nor can it be reconfigured mid-flight. Services and health checks must be
 registered before `Start`; there is no deregistration for either. A

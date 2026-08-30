@@ -12,7 +12,9 @@ service distinguishes a controlled stop from an upstream cancellation.
 Whether triggered by a signal, a direct `Stop()`, or parent-context
 cancellation, shutdown always runs the same sequence:
 
-1. Transition the controller to `Stopping`.
+1. Transition the controller to `Stopping`, from `Running` or from
+   `UnableToStart`. Readiness is already false in both cases from this point on,
+   so traffic stops being routed here before any service is stopped.
 2. Detach OS-signal handling.
 3. Cancel the controller context with the cause `ErrShutdown` — unblocking every
    `WithStart` that waits on `ctx.Done()`.

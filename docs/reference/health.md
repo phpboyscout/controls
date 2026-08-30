@@ -30,7 +30,7 @@ type HealthCheck struct {
 Registration rules, both enforced by the returned `error`:
 
 - `cannot register health check after start` — checks must be registered while
-  the controller is still in the `Unknown` state.
+  the controller is still in the `NeverStarted` state.
 - `duplicate health check name: "<name>"` — only checked against other health
   checks. **A check may silently share a name with a registered service**, in
   which case the report contains two entries with the same `name` and consumers
@@ -97,6 +97,7 @@ type CheckResult struct {
 ```go
 type HealthReport struct {
 	OverallHealthy bool            `json:"overall_healthy"`
+	State          State           `json:"state"`
 	Services       []ServiceStatus `json:"services"`
 }
 
@@ -112,6 +113,7 @@ Marshalled, a report looks like this:
 ```json
 {
   "overall_healthy": false,
+  "state": "running",
   "services": [
     { "name": "http-api", "status": "OK" },
     { "name": "cache", "status": "DEGRADED", "error": "warming" },
@@ -120,6 +122,10 @@ Marshalled, a report looks like this:
 }
 ```
 
+- `state` is the controller's lifecycle state when the report was taken, on all
+  three reports. A reader that only sees `overall_healthy` cannot tell an
+  unhealthy service from a controller that has begun shutting down, and those
+  want different responses.
 - `status` is one of `"OK"`, `"DEGRADED"`, `"ERROR"`.
 - `error` is omitted when empty, and carries the probe's error text or the check
   result's `Message`.

@@ -29,7 +29,8 @@ human-facing `/status` dump.
 ## How the reports aggregate
 
 Each report walks two sources and merges them into one `HealthReport`
-(`OverallHealthy bool` plus a `ServiceStatus` per entry):
+(`OverallHealthy bool`, the controller's lifecycle `State`, and a
+`ServiceStatus` per entry):
 
 1. **Per-service probes.** For each registered service, the report calls the
    relevant probe:
@@ -85,7 +86,30 @@ have stalled and the cache is no longer trusted. A stale entry is reported as
 `"ERROR"` in every report — it fails readiness closed and is surfaced in
 `Status()` — rather than serving a last-known-healthy result indefinitely.
 
-## Why readiness fails closed
+## Readiness is true only while the controller is Running
+
+The first rule is not about probes at all. `Readiness()` reports
+`OverallHealthy: false` in every state except `Running`, whatever the probes say.
+`Liveness()` and `Status()` are not gated this way.
+
+The case it exists for is shutdown. Services stop in reverse registration order,
+so a transport server registered early is stopped **last**, and without this rule
+it keeps answering HTTP 200 for the whole drain while every service it depends on
+is torn down beneath it. With the default 5s shutdown timeout that is up to five
+seconds of traffic arriving at a listener whose dependencies are already gone.
+
+Liveness is deliberately left alone. A liveness probe failing during a graceful
+shutdown invites the orchestrator to kill a process that is shutting down
+correctly, destroying the in-flight requests the drain existed to protect.
+
+The same rule covers `NeverStarted` (nothing is serving yet) and `UnableToStart`
+(a registered service has proven it will never start, so the process cannot do
+its job). In the latter case nothing is stopped and the error still reaches the
+error channel: the controller reports unready and leaves the decision to whoever
+is watching. See wiki spec
+[0003](https://gitlab.com/phpboyscout/go/controls/-/wikis/specs/0003-the-lifecycle-state-should-reach-the-health-reports).
+
+## Why readiness also fails closed on an unrun check
 
 An async check has **no cached result** until its first run completes. That run
 begins as soon as the controller starts — the poller does not wait out an

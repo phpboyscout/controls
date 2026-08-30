@@ -27,7 +27,7 @@ State immediately after `NewController`, before any option is applied:
 
 | Field | Value |
 |---|---|
-| Lifecycle state | `Unknown` |
+| Lifecycle state | `NeverStarted` |
 | Logger | `slog.New(slog.DiscardHandler)` — nothing is logged |
 | Shutdown timeout | `DefaultShutdownTimeout` (5s) |
 | Message channel | unbuffered `chan Message` |
@@ -53,8 +53,8 @@ apply one after construction that is safe once the controller is running — see
 
 | Method | Blocks? | Effect | Called at the wrong time |
 |---|---|---|---|
-| `Start()` | no | `Unknown → Running`, then launches one supervisor goroutine per registered service, the async health-check goroutines, and the control goroutines (message processor, error/context handler, and the signal handler if `WithSignals` was passed). | Any state other than `Unknown`: logs `WARN "Start called, but controller is not in the Unknown state; ignoring"` and returns. A controller is **single-use** — after `Stopped` it cannot be started again. |
-| `Stop()` | no | `Running → Stopping`, then sends `Stop` on the message channel. Returns before the shutdown sequence has finished. | Any state other than `Running`: logs `WARN "Stop called, but not in expected state, unable to continue"` and returns. Safe to call concurrently or repeatedly. |
+| `Start()` | no | `NeverStarted → Running`, then launches one supervisor goroutine per registered service, the async health-check goroutines, and the control goroutines (message processor, error/context handler, and the signal handler if `WithSignals` was passed). | Any state other than `NeverStarted`: logs `WARN "Start called, but controller has already started; ignoring"` and returns. A controller is **single-use** — after `Stopped` it cannot be started again. |
+| `Stop()` | no | `Running → Stopping`, **or** `UnableToStart → Stopping`, then sends `Stop` on the message channel. Returns before the shutdown sequence has finished. | Any other state: logs `WARN "Stop called, but not in expected state, unable to continue"` and returns. Before any `Start` that means it is a no-op and the controller stays startable. Safe to call concurrently or repeatedly. |
 | `Wait()` | yes, unbounded | Blocks until every supervisor goroutine has exited *and* the shutdown sequence has completed. | Before `Start`, the wait group is empty and it returns immediately. It never returns while a `StartFunc` refuses to return after cancellation — use `WaitContext` for that case. |
 | `WaitContext(ctx)` | yes, bounded | Returns `nil` when the wait group drains, or `ctx.Err()` when `ctx` completes first. | On the abandoned path the stuck supervisor goroutines and one internal helper goroutine are deliberately leaked. |
 
@@ -74,11 +74,11 @@ on no interface, including `Controllable`.
 |---|---|---|
 | `Status()` | `HealthReport` | Every service (via its `WithStatus` probe) and every health check regardless of `CheckType`. Not a gate: an async check that has not run yet counts as OK. |
 | `Liveness()` | `HealthReport` | Every service (`WithLiveness`, falling back to `WithStatus`) plus checks of type `CheckTypeLiveness` or `CheckTypeBoth`. |
-| `Readiness()` | `HealthReport` | Every service (`WithReadiness`, falling back to `WithStatus`) plus checks of type `CheckTypeReadiness` or `CheckTypeBoth`. Fails closed: an async check with no result yet is reported `ERROR`. |
+| `Readiness()` | `HealthReport` | Every service (`WithReadiness`, falling back to `WithStatus`) plus checks of type `CheckTypeReadiness` or `CheckTypeBoth`. **Ready only while `Running`**: in every other state `OverallHealthy` is false regardless of what the probes say. Also fails closed on an async check with no result yet, reported `ERROR`. |
 | `GetServiceInfo(name string)` | `(ServiceInfo, bool)` | `false` when no service of that name was registered. When two services share a name, only the most recently registered one's info is stored. |
 | `GetCheckResult(name string)` | `(CheckResult, bool)` | `false` when the name is unknown **or** the check has not yet produced a result — which for a synchronous check means until a report including it has been built. |
-| `GetState()` | `State` | One of `Unknown`, `Running`, `Stopping`, `Stopped`. |
-| `IsRunning()`, `IsStopping()`, `IsStopped()` | `bool` | Equality tests against `Running`, `Stopping`, `Stopped`. There is no `IsUnknown`. |
+| `GetState()` | `State` | One of `NeverStarted`, `Running`, `UnableToStart`, `Stopping`, `Stopped`, or `Unknown` for a `Controller` built without `NewController`. |
+| `IsRunning()`, `IsStopping()`, `IsStopped()` | `bool` | Equality tests against `Running`, `Stopping`, `Stopped`. There is no predicate for `NeverStarted`, `UnableToStart` or `Unknown`; compare `GetState()` directly. |
 | `GetContext()` | `context.Context` | The controller's own context — the one services receive. It is cancelled with cause `ErrShutdown` during shutdown. |
 | `GetLogger()` | `*slog.Logger` | The configured logger, or the discard logger. |
 | `WaitGroup()` | `*sync.WaitGroup` | The wait group `Wait` blocks on. On no interface. |
@@ -116,9 +116,17 @@ control goroutines read after `Start`. They carry no internal synchronisation.
 **Call them only during construction, before `Start`** — which is what the
 `WithX` options do internally. Calling one on a running controller races the
 running goroutines and is a programming error, not a supported reconfiguration
-path. `SetState` in particular bypasses the compare-and-set transitions the
-lifecycle depends on; it exists to satisfy the `StateAccessor` interface for
-fakes, not to drive a real controller.
+path.
+
+`SetState` is a different case, and the earlier version of this page had it
+wrong. It is not there for fakes: `StateAccessor` is meant to be consumed **and
+implemented** outside this module, and a consumer driving a controller it owns
+needs to say what state it is in. What is true is that it bypasses the
+compare-and-set transitions, so calling it on a controller you did not construct
+races the control goroutines, and since readiness is gated on the state it can
+take a healthy process out of rotation. See wiki spec
+[0003](https://gitlab.com/phpboyscout/go/controls/-/wikis/specs/0003-the-lifecycle-state-should-reach-the-health-reports)
+D7.
 
 `SetSignalsChannel` detaches any previous `signal.Notify` registration before
 storing the new channel, so swapping the channel cannot leave an orphaned
@@ -128,11 +136,12 @@ registration receiving signals nobody reads.
 
 | Symbol | Value | Meaning |
 |---|---|---|
-| `ErrShutdown` | `errors.New("controller shutdown")` | The cause attached to the controller context for every stop the controller drives. Test for it with `errors.Is(context.Cause(ctx), controls.ErrShutdown)`. |
+| `ErrShutdown` | `errors.NewSentinel("controls.shutdown", "controller shutdown")` | The cause attached to the controller context for every stop the controller drives. Test for it with `errors.Is(context.Cause(ctx), controls.ErrShutdown)`. |
 | `DefaultShutdownTimeout` | `5 * time.Second` | Applied when `WithShutdownTimeout` is not passed. |
 | `DefaultRestartResetInterval` | `30 * time.Second` | Applied when `RestartPolicy.RestartResetInterval` is zero. |
 | `Stop` | `Message("stop")` | The only control message. |
-| `Unknown`, `Running`, `Stopping`, `Stopped` | `State` values | The lifecycle states, in order. |
+| `NeverStarted`, `Running`, `UnableToStart`, `Stopping`, `Stopped` | `State` values | The lifecycle states, in order. |
+| `Unknown` | `State` value | Not part of that sequence: the state could not be determined. |
 
 ## Related
 
