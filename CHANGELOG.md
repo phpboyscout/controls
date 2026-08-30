@@ -1,5 +1,18 @@
 # Changelog
 
+## [v0.4.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.4.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.3.2...v0.4.0)
+
+### Features
+
+- **controls**: report unready outside Running, and split Unknown into three states ([85c004f](https://gitlab.com/phpboyscout/go/controls/-/commit/85c004fb4b65f4b74a19c8e9d06d02753c05a970))
+- **supervisor**: supervise children that attach and detach at runtime ([85448cd](https://gitlab.com/phpboyscout/go/controls/-/commit/85448cde2642e6a15d06f70f50a964adc26ee62e))
+
+### Bug Fixes
+
+- **supervisor**: make the lifecycle a state machine and bound every wait ([e297bfa](https://gitlab.com/phpboyscout/go/controls/-/commit/e297bfa37b0814a2f59f8a2922c703af2bf603b4))
+
 ## [v0.3.2](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.3.2)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.3.1...v0.3.2)
