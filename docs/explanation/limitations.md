@@ -70,8 +70,9 @@ does nothing. To run services again, construct a new controller.
 Nor can it be reconfigured mid-flight. Services and health checks must be
 registered before `Start`; there is no deregistration for either. A
 [`Supervisor`](../how-to/supervise-dynamic-children.md) is the answer when the
-set has to change: its children attach and detach at any time, and detaching is
-the deregistration a `Controller` does not have. The `SetX`
+set has to change: its children can be detached at any time, and attached at any
+time before shutdown begins (`Attach` returns `ErrSupervisorStopped` once `Stop`
+has started). Detaching is the deregistration a `Controller` does not have. The `SetX`
 setters exist for construction — they mutate fields the control goroutines read
 without synchronisation, so calling one on a running controller is a race, not a
 supported reconfiguration path.
@@ -134,10 +135,14 @@ retry in step.
 
 ## There are no metrics, traces or lifecycle events
 
-No counters, no OpenTelemetry, no callback or channel that fires on a state
-transition, and no event stream of restarts. The observable surface is the
-`*slog.Logger` you inject, the error channel, `GetState()`, `GetServiceInfo`, and
-the health reports. Keeping instrumentation out is what the dependency-footprint
+No counters, no OpenTelemetry and no event stream of restarts. The observable
+surface is the `*slog.Logger` you inject, the error channel, `GetState()`,
+`GetServiceInfo`, and the health reports.
+
+The one exception is a `Supervisor`, which fires `WithOnFailure` and sends on
+`Failures()` when a child reaches a terminal failure. That is a single
+transition, not an event stream: nothing fires on a start, a restart or a clean
+stop. Keeping instrumentation out is what the dependency-footprint
 guard test enforces — instrument in the layer above, from those signals.
 
 ## It reads no configuration and ships no mocks

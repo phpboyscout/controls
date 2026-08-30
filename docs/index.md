@@ -110,6 +110,7 @@ The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
     - [Add health checks](how-to/health-checks.md)
     - [Configure restart policy](how-to/restart-policy.md)
     - [Handle graceful shutdown & signals](how-to/graceful-shutdown.md)
+    - [Supervise children that come and go](how-to/supervise-dynamic-children.md)
 - **Explanation** — understanding-oriented background:
     - [Architecture & the lifecycle state machine](explanation/architecture.md)
     - [Health, liveness & readiness](explanation/health-model.md)
@@ -120,6 +121,7 @@ The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
   what happens when it is set wrongly:
     - [Controller](reference/controller.md)
     - [Services and restart policy](reference/services.md)
+    - [Supervisor](reference/supervisor.md)
     - [Health checks and reports](reference/health.md)
     - [Defaults and timings](reference/defaults.md)
     - [Interfaces](reference/interfaces.md)

@@ -47,14 +47,16 @@ a release-train question.
 
 ## Where it has got to
 
-Pre-1.0 at `v0.3.1`, with a deps-only Release MR open for `v0.3.2`. No Go source
-has changed since `v0.3.0` adopted `go/errors` in early August; behaviour last
-moved at `v0.2.0` (single-owner signal handling) and `v0.1.4` (a run of
-concurrency fixes, each with its own regression test file). Everything since has
-been Renovate and docs, so treat the public surface as settled. Those docs are a
-full Diátaxis set at [controls.go.phpboyscout.uk](https://controls.go.phpboyscout.uk),
-but issue #3 tracks a prose pass over them and the README: parts of both still
-describe an older dependency footprint, so check before repeating either.
+Pre-1.0 at `v0.3.2`, with `Supervisor` on `feat/supervisor` (spec 0002) and not
+yet released. Before it, no Go source had changed since `v0.3.0` adopted
+`go/errors` in early August; behaviour last moved at `v0.2.0` (single-owner
+signal handling) and `v0.1.4` (a run of concurrency fixes, each with its own
+regression test file). So `Controller` is settled and `Supervisor` is new, which
+is the split to keep in mind before treating any part of the surface as proven.
+The docs are a full Diátaxis set at
+[controls.go.phpboyscout.uk](https://controls.go.phpboyscout.uk), but issue #3
+tracks a prose pass over them and the README: parts of both still describe an
+older dependency footprint, so check before repeating either.
 
 ## Traps
 
@@ -161,15 +163,28 @@ must therefore **never** fail because a child failed — a Supervisor is registe
 so one dead child would otherwise take the process out of rotation through that registration. A
 failed child is reported as `CheckDegraded` and delivered to the consumer as a `Failure`.
 
-**`RestartPolicy` is shared, and its rules are shared.** `MaxRestarts <= 0` means **unlimited**, for
-a `Child` exactly as for a `Service`. The first draft of the supervisor read it as *never* — same
-field, opposite meaning, both visible from one screen. `TestSupervisorAndServiceRestartAlike` guards
-it.
+**`RestartPolicy` is shared, and its rules are shared for real.** `restartsExhausted` and
+`classifyOutcome` in `services.go` have two callers each: a `Service`'s restart loop and a `Child`'s.
+`MaxRestarts <= 0` means **unlimited** for both, because it is one line of code rather than two
+that agree. The first draft of the supervisor read it as *never* — same field, opposite meaning,
+both visible from one screen. Two fields stay inert for a `Child`: `HealthFailureThreshold` and
+`HealthCheckInterval` need a `Status` probe, and a `Child` has none. That is documented on the
+field rather than left to be discovered.
+
+**A Supervisor is a state machine, and every call has an out-of-order answer.** `supNew`,
+`supRunning`, `supStopping`, `supStopped`, one direction only. `Attach` and `Start` return
+`ErrSupervisorStopped` once shutdown begins, because accepting a child that will never be
+supervised is worse than refusing it. `Stop` before `Start` returns at once rather than waiting on
+a done channel no goroutine will close. `Stop` and `Detach` are bounded by their context across
+`Child.Stop` as well as the child's own goroutine.
 
 **A child's `Start` is recovered; a service's is not.** Deliberate asymmetry: a child is
 caller-supplied code the supervisor launched, so the same line `callStop` and `callProbe` already
 draw applies. A panic is still a defect — counted separately from an error return.
 
-**Failure notification runs on its own goroutine.** Not for throughput: it keeps failures ordered and
-means a callback calling `Detach` on the child that just died cannot deadlock against a lock held
-while notifying.
+**Failure notification runs on its own goroutine, and nothing joins it.** Not for throughput: it
+keeps failures ordered and means a callback calling back into the supervisor cannot deadlock. That
+includes `Stop` — an earlier version waited for the dispatch goroutine during shutdown, so a
+callback calling `Stop` waited for itself. The queue behind the callback is unbounded where the
+`Failures()` channel is bounded, because the channel is opt-in and the callback is not: a consumer
+that registered one did not agree to lose notifications.

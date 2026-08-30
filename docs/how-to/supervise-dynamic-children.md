@@ -30,7 +30,10 @@ controller.Register("workers",
     controls.WithReadiness(sup.Readiness),
 )
 
-controller.RegisterHealthCheck(sup.HealthCheck("workers"))
+// A distinct name: RegisterHealthCheck's contract is that a check name is
+// unique across both services and health checks, and only the health-check map
+// is actually checked, so a collision is accepted and reported twice.
+controller.RegisterHealthCheck(sup.HealthCheck("workers-children"))
 ```
 
 ## Attach and detach
@@ -65,9 +68,43 @@ running that nothing reports, which is the one shape this API does not offer.
 
 ## The restart policy is the one you already know
 
-`RestartPolicy` is the same type a registered service uses, and means the same
-things — including that `MaxRestarts <= 0` is **unlimited**, not none. A child
-with a `nil` policy runs once and its outcome is final.
+`RestartPolicy` is the same type a registered service uses, read through the
+same helpers — including that `MaxRestarts <= 0` is **unlimited**, not none. A
+child with a `nil` policy runs once and its outcome is final. The value is
+copied at `Attach`, so you may reuse or edit your policy struct afterwards.
+
+Two fields are inert on a child. `HealthFailureThreshold` and
+`HealthCheckInterval` drive a service's health-based restarts through its
+`Status` probe, and a child has no probe to read. Setting them changes nothing.
+
+## What counts as a failure
+
+A child's `Start` returning is classified by the same rule a service's is
+(`classifyOutcome`, shared):
+
+| It returns | The supervisor does |
+|---|---|
+| `nil` | treats the child as finished. It is not restarted, and reports `stopped`. **This differs from a `Service`**, where a `nil` return means "still serving in the background" |
+| `context.Canceled`, or anything at all once the supervisor's context is cancelled | treats it as a clean cancellation. No restart, no `Failure` |
+| any other error | a failure: recorded, counted against the restart policy, and restarted or reported terminal |
+
+A panic is converted to an error and counted separately, so `Failure.Panicked`
+and `ChildStatus.Panics` tell a bug from a capacity problem.
+
+## What `Health` reports
+
+`sup.Health()` returns a `map[string]ChildStatus` — one entry per attached
+child, carrying its `State`, `Restarts`, `Panics` and `LastErr`. It is data, not
+health: what to do about a failed child is your judgement, which is the whole
+point of the boundary below.
+
+| `ChildState` | Means |
+|---|---|
+| `pending` | attached, and the supervisor has not started it yet |
+| `running` | its `Start` has been called and has not returned |
+| `backoff` | it failed and is waiting out its restart delay |
+| `failed` | it exhausted its restart policy. Terminal |
+| `stopped` | it returned cleanly, or was cancelled |
 
 ## A failed child does not make the process unready
 
@@ -94,21 +131,55 @@ it can make **itself** unready, which is what registration is for.
 ## Both ways to hear about a failure
 
 ```go
-// A callback, for recording it.
+// A callback, for recording it. Ordered, and never dropped.
 controls.NewSupervisor(controls.WithOnFailure(func(f controls.Failure) { ... }))
 
-// A channel, for a control loop that wants to act.
-for f := range sup.Failures() {
-    if f.Panicked {
-        alert(f)   // a bug, not a capacity problem
+// A channel, for a control loop that wants to act. Note the select: the channel
+// is never closed, so a bare `range` over it does not end at shutdown.
+for {
+    select {
+    case f := <-sup.Failures():
+        if f.Panicked {
+            alert(f)   // a bug, not a capacity problem
+        }
+        reattachWithBackoff(f.Name)
+    case <-done:
+        return
     }
-    reattachWithBackoff(f.Name)
 }
 ```
 
-The channel is created on first call and bounded, so a consumer that never asks
-for one never has a queue filling behind it. Sends that would block are dropped
-and counted — check `sup.DroppedReports()`, which should be zero.
+The two shed differently, on purpose. The **channel** is opt-in and bounded: a
+consumer that never calls `Failures` never has a queue filling behind it, and a
+send that would block is dropped and counted, so check `sup.DroppedReports()`,
+which should be zero. The **callback** is neither opt-in nor bounded, because a
+consumer that registered one did not agree to lose notifications, so its queue
+is unbounded and ordered. The cost is the usual one: a callback that never
+returns is a queue that never drains.
+
+A callback may call back into the supervisor, `Stop` included. Nothing is held
+while it runs, and nothing joins the goroutine it runs on. The corollary is worth
+saying: `Stop` returning does **not** mean every callback has finished. One still
+executing runs to completion, and the goroutine ends when the queue drains.
+
+## Out of order
+
+A `Supervisor` is single use, and every call has a defined answer when it
+arrives in the wrong order:
+
+| Call | Before `Start` | While running | Once `Stop` has begun |
+|---|---|---|---|
+| `Attach` | accepted, started with the supervisor | accepted, started immediately | `ErrSupervisorStopped` |
+| `Start` | starts | "already started" | `ErrSupervisorStopped` |
+| `Stop` | returns at once, nothing was started | full shutdown | waits for the shutdown in flight |
+| `Detach` | returns `nil`, the child never ran | stops and waits, bounded | still resolves; the child is stopping or already stopped |
+| `Readiness` | `ErrSupervisorNotStarted` | `nil` | `ErrSupervisorStopped` |
+
+`Stop` and `Detach` are bounded by the context you give them, across the child's
+own goroutine **and** its `Child.Stop`. A child that outlives the budget is
+abandoned rather than allowed to hold shutdown open, which is the same bargain a
+`Controller` strikes at its shutdown deadline. `Health` still lists it, so an
+abandoned child is visible rather than silent.
 
 ## Children must not depend on each other
 

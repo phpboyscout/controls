@@ -54,12 +54,23 @@ time: 1s, 2s, 4s, 8s, 16s, 30s, 30s, … Because each run is far shorter than th
 | Async staleness bound | **3 × `Interval`** | Fixed; an older cached result is reported `"ERROR"` with `cached health result is stale`. |
 | `CheckResult.Status` | `CheckHealthy` | An empty `CheckResult{}` reports `"OK"`. |
 
+## Supervisor defaults
+
+| Setting | Default | Changed by | A zero or missing value means |
+|---|---|---|---|
+| `Failures()` channel | not created | calling `Failures()` | A consumer that never calls it never has a queue filling behind it. Created on first call, bounded at `DefaultFailureBufferSize` = **16**, and never closed. |
+| Failure callback queue | unbounded, ordered | `WithOnFailure(fn)` | Without the option no queue exists and no goroutine runs. |
+| `Child.RestartPolicy` | `nil` — run once, outcome final | the field | `nil` is **never restart**. A non-nil policy with `MaxRestarts <= 0` is **unlimited**, the opposite reading. |
+| `Child.Stop` | no-op | the field | Cancelling the context passed to `Start` is the primary mechanism; `Stop` is the extra one. |
+| `Stop` / `Detach` budget | the context you pass | — | `context.Background()` is an unbounded budget. A child that ignores cancellation then holds the call open until it returns. |
+
 ## Which defaults are exported
 
 | Constant | Value |
 |---|---|
 | `controls.DefaultShutdownTimeout` | `5 * time.Second` |
 | `controls.DefaultRestartResetInterval` | `30 * time.Second` |
+| `controls.DefaultFailureBufferSize` | `16` |
 
 The 1s initial backoff, 30s max backoff, 10s health interval, 5s check timeout,
 2.0 multiplier and 3× staleness multiple are internal. You cannot reference them

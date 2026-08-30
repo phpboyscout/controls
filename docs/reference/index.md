@@ -13,6 +13,7 @@ way".
 |---|---|
 | [Controller](controller.md) | `NewController`, every `ControllerOpt`, every controller method, and what each does when called at the wrong time |
 | [Services and restart policy](services.md) | `Register`, every `ServiceOption`, the `StartFunc`/`StopFunc`/`StatusFunc` contracts, `RestartPolicy` fields, `ServiceInfo` |
+| [Supervisor](supervisor.md) | `NewSupervisor`, `WithOnFailure`, every `Supervisor` method, the `Child` contract, `ChildState`, `Failure`, and what each call does out of order |
 | [Health checks and reports](health.md) | `HealthCheck` fields, `CheckStatus`, `CheckType`, `CheckResult`, the `HealthReport` JSON shape, and what each report includes |
 | [Defaults and timings](defaults.md) | Every default value in one table, the option or field that changes it, and what a zero value means |
 | [Interfaces](interfaces.md) | `Runner`, `HealthReporter`, `HealthCheckReporter`, `StateAccessor`, `Configurable`, `ChannelProvider`, `Controllable` — and the methods that are on none of them |
