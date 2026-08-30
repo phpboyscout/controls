@@ -152,6 +152,30 @@ needs the setter. Its own doc comment said "read access", `docs/reference/interf
 readers to it for reading, and `docs/reference/controller.md` said it existed "for fakes". A review
 proposed removing it on exactly that reading. Spec 0003 D7 records why it stays.
 
+## A regression guard nobody has seen fail is indistinguishable from one that cannot
+
+Three of this repo's guards passed against the defect they were written for. Each was found by
+reinstating the bug rather than by reading the test, which is the only check that settles it.
+
+- **`TestSignalsNotSwallowedBeforeStart`** re-executed the test binary as a child described as
+  having "signals enabled" and never passed `WithSignals`. Signals are opt-in, so `signal.Notify`
+  was never called by any path and SIGINT kept its default disposition whatever the constructor
+  did. It passed identically with F5 reinstated (issue 5).
+- **`TestErrorHandler_NoBusySpinAfterStop`** measured goroutine counts, which catch a handler that
+  never RETURNS. The D4 busy-spin is a handler that loops on a permanently-ready `ctx.Done()` case
+  and then exits perfectly well. Reinstating it left the test green: named for a defect it could
+  not see (issue 8). A spin is CPU, so the test for it measures CPU, with a slow `WithStop` holding
+  shutdown open wide enough for one to accumulate.
+- **`TestSupervisorAndServiceRestartAlike`** compared only invocation counts, so deleting the whole
+  backoff `select` left it green.
+
+**`runtime.NumGoroutine` must never be asserted from a `t.Parallel()` test.** It counts the
+process, so in parallel it cannot tell a leak in the controller under test from another test being
+busy, and symmetrically a real leak hides behind another test finishing. Four tests here use a
+process-global measure and all four are sequential, each saying why: a Go test that does not call
+`t.Parallel()` runs while every parallel test in the package is paused. Adding `t.Parallel()` back
+to match the tests around them is the obvious tidy-up and silently breaks them.
+
 ## Which skills apply here
 
 | When | Skill |
