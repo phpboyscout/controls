@@ -67,13 +67,43 @@ const (
 )
 
 const (
-	Unknown  State = "unknown"
-	Running  State = "running"
+	// Unknown means the state could not be determined. It is what [Controller.GetState]
+	// reports for a zero-valued Controller, i.e. one built without NewController,
+	// which is otherwise undetectable because State is a string type and its zero
+	// value is the empty string.
+	Unknown State = "unknown"
+
+	// NeverStarted means the controller was constructed and Start has not been
+	// called. Registration is only honoured in this state, and a Stop here leaves
+	// it unchanged: stopping something that never started is a no-op, so the
+	// controller stays startable.
+	NeverStarted State = "never_started"
+
+	// Running means Start has been called and shutdown has not begun. It is the
+	// only state in which the controller reports ready.
+	Running State = "running"
+
+	// UnableToStart means a registered service has proven it will never start: it
+	// has failed without ever starting cleanly and has exhausted its restart
+	// policy. Nothing is stopped, and the error still reaches the error channel;
+	// what changes is that the controller stops reporting ready, so an
+	// orchestrator routes no traffic to a process that cannot do its job.
+	//
+	// A service that fails and then recovers on a restart never reaches this, and
+	// neither does one that started cleanly and failed later. Both conditions are
+	// required, so the state is terminal rather than something readiness flaps on
+	// through a slow boot.
+	UnableToStart State = "unable_to_start"
+
 	Stopping State = "stopping"
 	Stopped  State = "stopped"
 )
 
-// State represents the lifecycle state of the controller (Unknown, Running, Stopping, Stopped).
+// State represents the lifecycle state of the controller.
+//
+// It moves in one direction: NeverStarted to Running, then either to Stopping and
+// Stopped or to UnableToStart and then Stopping and Stopped. Unknown is not part
+// of that sequence; it means the value could not be determined.
 type State string
 
 // Message represents a control message sent to the controller (e.g. "stop").
@@ -188,8 +218,17 @@ type ServiceStatus struct {
 
 // HealthReport is the aggregate health status across all registered services.
 type HealthReport struct {
-	OverallHealthy bool            `json:"overall_healthy"`
-	Services       []ServiceStatus `json:"services"`
+	OverallHealthy bool `json:"overall_healthy"`
+
+	// State is the controller's lifecycle state when the report was taken.
+	//
+	// Carried on every report, including Status, which is explicitly not a gate.
+	// A reader that only sees OverallHealthy cannot tell an unhealthy service
+	// from a controller that has begun shutting down, and those want different
+	// responses.
+	State State `json:"state"`
+
+	Services []ServiceStatus `json:"services"`
 }
 
 // Runner provides service lifecycle operations.
@@ -220,7 +259,21 @@ type HealthCheckReporter interface {
 	GetCheckResult(name string) (CheckResult, bool)
 }
 
-// StateAccessor provides read access to controller state and context.
+// StateAccessor provides access to controller state and context, and is meant
+// to be consumed AND implemented outside this module.
+//
+// The setter is deliberate, and is why this is not a read-only interface: a
+// consumer driving a controller it owns needs to be able to say what state it is
+// in, and a consumer implementing this interface over its own type needs the
+// same surface the Controller has. It was proposed for removal once on the
+// reading that this was a read-side view, which the doc comment then said it
+// was; see wiki spec 0003 D7.
+//
+// SetState mutates a field the control goroutines read, so the contract is the
+// one Configurable states: call it during construction, or on a controller you
+// own. Reaching into a running controller from elsewhere races those goroutines,
+// and since readiness is gated on the state (0003 D2) it can also take a healthy
+// process out of rotation.
 type StateAccessor interface {
 	GetState() State
 	SetState(state State)

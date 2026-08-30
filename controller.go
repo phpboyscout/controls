@@ -116,6 +116,13 @@ func (c *Controller) GetState() State {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
+	// A Controller built without NewController holds the zero value of State,
+	// which is the empty string: neither a valid state nor otherwise detectable.
+	// Reporting it as Unknown is what gives that constant a job.
+	if c.state == "" {
+		return Unknown
+	}
+
 	return c.state
 }
 
@@ -149,14 +156,14 @@ func (c *Controller) Register(id string, opts ...ServiceOption) {
 	}
 
 	// Registering after Start has already transitioned the controller away from
-	// the initial Unknown state cannot supervise the service: Start has already
+	// the initial NeverStarted state cannot supervise the service: Start has already
 	// snapshotted the service count and launched the supervisor goroutines, so a
 	// late registration is never started, monitored, or stopped. Mirror
 	// RegisterHealthCheck's guard by surfacing the problem — but as a WARNING,
 	// since Register has no error return and the supervisor spec defaults missing
 	// funcs to no-ops. The service is still added (behaviour unchanged) so any
 	// status query still reflects it; it simply is not supervised.
-	if c.GetState() != Unknown {
+	if c.GetState() != NeverStarted {
 		c.logger.Warn(
 			"Register called after Start; service will not be supervised",
 			"service_name", id,
@@ -172,7 +179,7 @@ func (c *Controller) Register(id string, opts ...ServiceOption) {
 // Must be called before Start(). The check name must be unique across
 // both services and health checks.
 func (c *Controller) RegisterHealthCheck(check HealthCheck) error {
-	if c.GetState() != Unknown {
+	if c.GetState() != NeverStarted {
 		return errors.New("cannot register health check after start")
 	}
 
@@ -201,6 +208,27 @@ func (c *Controller) GetCheckResult(name string) (CheckResult, bool) {
 	return *r, true
 }
 
+// markUnableToStart records that a registered service has proven it will never
+// start (D4). Only a Running controller transitions: a shutdown already under
+// way is not reclassified, and a second unstartable service changes nothing.
+func (c *Controller) markUnableToStart(name string, err error) {
+	if c.compareAndSetState(Running, UnableToStart) {
+		c.logger.Error("a registered service will never start; the controller is now reporting unready",
+			"service_name", name, "error", err)
+	}
+}
+
+// beginShutdown transitions into Stopping from any state a shutdown may start
+// from, and reports whether this caller made the transition.
+//
+// UnableToStart is one of them, and forgetting it would be quiet and bad: Stop
+// would refuse, and the services that ARE running would never be told to stop
+// (D8). The controller reports unready in that state but it is still a live
+// process holding whatever its working services hold.
+func (c *Controller) beginShutdown() bool {
+	return c.compareAndSetState(Running, Stopping) || c.compareAndSetState(UnableToStart, Stopping)
+}
+
 // compareAndSetState atomically checks if the current state matches expected,
 // and if so, sets it to next. Returns true if the transition occurred.
 func (c *Controller) compareAndSetState(expected, next State) bool {
@@ -220,12 +248,12 @@ func (c *Controller) compareAndSetState(expected, next State) bool {
 // already running (or stopping/stopped) returns early without double-starting
 // services or double-counting the wait group (D3).
 func (c *Controller) Start() {
-	// CAS Unknown -> Running. Only the first caller proceeds; this also sets the
+	// CAS NeverStarted -> Running. Only the first caller proceeds; this also sets the
 	// Running state before launching services so the signal handler (running
 	// concurrently via controls()) can transition to Stopping if an interrupt
 	// arrives while services are still initialising.
-	if !c.compareAndSetState(Unknown, Running) {
-		c.logger.Warn("Start called, but controller is not in the Unknown state; ignoring", "current_state", c.GetState())
+	if !c.compareAndSetState(NeverStarted, Running) {
+		c.logger.Warn("Start called, but controller has already started; ignoring", "current_state", c.GetState())
 
 		return
 	}
@@ -235,6 +263,7 @@ func (c *Controller) Start() {
 	// Propagate the valid-error predicate to the supervisor before any service
 	// run can be classified.
 	c.services.validError = c.validError
+	c.services.onUnableToStart = c.markUnableToStart
 
 	// Snapshot the service count under the services mutex so the wait-group add
 	// matches exactly the goroutines services.start will spawn.
@@ -297,7 +326,7 @@ func (c *Controller) WaitContext(ctx context.Context) error {
 // Stop initiates a graceful shutdown. Duplicate calls while already
 // stopping or stopped are safely ignored.
 func (c *Controller) Stop() {
-	if !c.compareAndSetState(Running, Stopping) {
+	if !c.beginShutdown() {
 		c.logger.Warn("Stop called, but not in expected state, unable to continue", "current_state", c.GetState())
 
 		return
@@ -442,7 +471,7 @@ func (c *Controller) processControlMessages() {
 func (c *Controller) handleStopMessage() {
 	// If still Running, transition to Stopping first (handles direct channel sends).
 	// If Stop() already transitioned us, this CAS is a harmless no-op.
-	c.compareAndSetState(Running, Stopping)
+	c.beginShutdown()
 
 	if c.GetState() != Stopping {
 		return
@@ -585,9 +614,11 @@ func (c *Controller) healthCheckStatuses(filter func(CheckType) bool, failClosed
 // Status returns an aggregate health report for all registered services and health checks.
 func (c *Controller) Status() HealthReport {
 	report := c.services.status()
-	// Status includes all check types. Not a readiness gate, so do not fail closed.
+	// Status includes all check types. Not a readiness gate, so do not fail closed,
+	// and the lifecycle state is carried as data rather than as a verdict.
 	checks, healthy := c.healthCheckStatuses(func(_ CheckType) bool { return true }, false)
 	report.Services = append(report.Services, checks...)
+	report.State = c.GetState()
 
 	if !healthy {
 		report.OverallHealthy = false
@@ -603,7 +634,12 @@ func (c *Controller) Liveness() HealthReport {
 		return ct == CheckTypeLiveness || ct == CheckTypeBoth
 	}, false)
 	report.Services = append(report.Services, checks...)
+	report.State = c.GetState()
 
+	// Liveness is deliberately NOT gated on the lifecycle state (0003 D2). A
+	// liveness probe failing during a graceful shutdown invites the orchestrator
+	// to kill a process that is shutting down correctly, destroying the in-flight
+	// requests the drain existed to protect.
 	if !healthy {
 		report.OverallHealthy = false
 	}
@@ -620,7 +656,18 @@ func (c *Controller) Readiness() HealthReport {
 	}, true)
 	report.Services = append(report.Services, checks...)
 
-	if !healthy {
+	state := c.GetState()
+	report.State = state
+
+	// Ready only while Running (0003 D2). Stated positively rather than as a list
+	// of failing states, so a state added later is unready by default, which is
+	// the safe direction for something that gates traffic.
+	//
+	// Without this a stopping controller reports ready and go/transport answers
+	// HTTP 200. Shutdown is reverse registration order, so a transport server
+	// registered early is stopped last and keeps serving while everything it
+	// depends on is torn down beneath it.
+	if !healthy || state != Running {
 		report.OverallHealthy = false
 	}
 
@@ -735,7 +782,7 @@ func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 		signals:          nil,
 		wg:               &sync.WaitGroup{},
 		shutdownTimeout:  DefaultShutdownTimeout,
-		state:            Unknown,
+		state:            NeverStarted,
 		services:         Services{},
 		healthChecks:     make(map[string]*healthCheckEntry),
 		shutdownComplete: make(chan struct{}),

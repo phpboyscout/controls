@@ -47,6 +47,10 @@ type Services struct {
 	services   []Service
 	info       sync.Map // map[string]ServiceInfo
 	validError ValidErrorFunc
+	// onUnableToStart is called when a service has failed without ever starting
+	// cleanly and has exhausted its restart policy, so it will never start. Set
+	// by the controller at Start, alongside validError.
+	onUnableToStart func(name string, err error)
 	// exits pairs each launched supervisor goroutine with the channel closed
 	// when it returns, so the shutdown sequence can bound its wait for
 	// supervisor exit and name any service whose StartFunc never returned (D10).
@@ -229,6 +233,12 @@ func (q *Services) supervise(ctx context.Context, srv Service, errs chan error, 
 	}
 	defer markStarted() // ensure wg is decremented if we exit early
 
+	// Deliberately NOT the `started` flag above: that one is a wg.Done guard and
+	// is fired by the defer on every exit, including a failing one. This records
+	// whether the service ever actually started cleanly, which is half of what
+	// UnableToStart requires (D4).
+	cleanStart := false
+
 	updateInfo := func(update func(*ServiceInfo)) {
 		if v, ok := q.info.Load(srv.Name); ok {
 			info := v.(ServiceInfo)
@@ -243,7 +253,7 @@ func (q *Services) supervise(ctx context.Context, srv Service, errs chan error, 
 		return
 	}
 
-	q.runWithRestartPolicy(ctx, srv, errs, markStarted, updateInfo, done)
+	q.runWithRestartPolicy(ctx, srv, errs, markStarted, &cleanStart, updateInfo, done)
 }
 
 func (q *Services) runOnce(ctx context.Context, srv Service, errs chan error, updateInfo func(func(*ServiceInfo)), done <-chan struct{}) {
@@ -259,8 +269,41 @@ func (q *Services) runOnce(ctx context.Context, srv Service, errs chan error, up
 	// Only forward genuine errors; a clean start, a cancellation, or a valid
 	// terminal error (e.g. http.ErrServerClosed) is not a failure.
 	if q.classifyRun(ctx, err) == outcomeError {
+		// A service with no restart policy has no retries, so its first genuine
+		// error is already exhaustion, and it never started cleanly (that would
+		// have classified as outcomeCleanStart). Both halves of D4 hold here on
+		// the first failure, which is easy to miss when the restart loop is the
+		// code being reasoned about.
+		if q.onUnableToStart != nil {
+			q.onUnableToStart(srv.Name, err)
+		}
+
 		sendErr(done, errs, err)
 	}
+}
+
+// reportExhausted records and forwards the terminal failure of a service that
+// has run out of restarts.
+//
+// cleanStart is whether it ever started cleanly. Never having done so, having
+// now exhausted its policy, is what UnableToStart means (0003 D4): the service
+// will never start. A service that DID start cleanly and failed later is an
+// ordinary failure, however many restarts it then used up.
+func (q *Services) reportExhausted(srv Service, err error, cleanStart bool,
+	updateInfo func(func(*ServiceInfo)), errs chan error, done <-chan struct{},
+) {
+	finalErr := errors.New("max restarts exceeded")
+	if err != nil {
+		finalErr = errors.Wrap(err, "max restarts exceeded")
+	}
+
+	updateInfo(func(i *ServiceInfo) { i.Error = finalErr })
+
+	if !cleanStart && q.onUnableToStart != nil {
+		q.onUnableToStart(srv.Name, finalErr)
+	}
+
+	sendErr(done, errs, finalErr)
 }
 
 func calculateNextBackoff(current, max time.Duration) time.Duration {
@@ -310,7 +353,7 @@ func resolveRestartTimings(p *RestartPolicy) restartTimings {
 // runOnceWithRestart performs a single supervised run. It returns the Start error
 // and whether the restart loop should keep going (false means terminate: graceful
 // shutdown or a clean start with no exit).
-func (q *Services) runOnceWithRestart(ctx context.Context, srv Service, markStarted func(), updateInfo func(func(*ServiceInfo))) (error, bool) {
+func (q *Services) runOnceWithRestart(ctx context.Context, srv Service, markStarted func(), cleanStart *bool, updateInfo func(func(*ServiceInfo))) (error, bool) {
 	updateInfo(func(i *ServiceInfo) { i.LastStarted = time.Now() })
 
 	err := srv.Start(ctx)
@@ -331,20 +374,22 @@ func (q *Services) runOnceWithRestart(ctx context.Context, srv Service, markStar
 		// breached. A clean start that is not health-failed is never an exit.
 		markStarted()
 
+		*cleanStart = true
+
 		return err, q.monitorHealth(ctx, srv, updateInfo)
 	default: // outcomeError
 		return err, true
 	}
 }
 
-func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs chan error, markStarted func(), updateInfo func(func(*ServiceInfo)), done <-chan struct{}) {
+func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs chan error, markStarted func(), cleanStart *bool, updateInfo func(func(*ServiceInfo)), done <-chan struct{}) {
 	restarts := 0
 	timings := resolveRestartTimings(srv.RestartPolicy)
 
 	for {
 		runStarted := time.Now()
 
-		err, keepGoing := q.runOnceWithRestart(ctx, srv, markStarted, updateInfo)
+		err, keepGoing := q.runOnceWithRestart(ctx, srv, markStarted, cleanStart, updateInfo)
 		if !keepGoing {
 			return
 		}
@@ -360,14 +405,7 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs c
 
 		// Check if we've exhausted restarts.
 		if restartsExhausted(srv.RestartPolicy, restarts) {
-			finalErr := errors.New("max restarts exceeded")
-			if err != nil {
-				finalErr = errors.Wrap(err, "max restarts exceeded")
-			}
-
-			updateInfo(func(i *ServiceInfo) { i.Error = finalErr })
-
-			sendErr(done, errs, finalErr)
+			q.reportExhausted(srv, err, *cleanStart, updateInfo, errs, done)
 
 			return
 		}
