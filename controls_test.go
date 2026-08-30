@@ -64,7 +64,7 @@ func getNewController(ctx context.Context) (*controls.Controller, *StateCounters
 func TestController_Controls(t *testing.T) {
 	t.Run("stopping", func(t *testing.T) {
 		c, cntrs, _ := getNewController(context.Background())
-		assert.Equal(t, controls.Unknown, c.GetState())
+		assert.Equal(t, controls.NeverStarted, c.GetState())
 		c.Start()
 
 		assert.True(t, c.IsRunning())

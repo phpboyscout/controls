@@ -79,5 +79,11 @@ func TestFreshAsyncCache_PassesReadiness(t *testing.T) {
 	entry.lastResult.Store(fresh)
 	c.healthChecks["cache"] = entry
 
+	// Readiness is also gated on the lifecycle state (0003 D2), and this test is
+	// about the staleness window rather than the lifecycle. Running is what
+	// isolates the rule under test; without it the assertion would pass or fail
+	// for the wrong reason.
+	c.SetState(Running)
+
 	assert.True(t, c.Readiness().OverallHealthy, "fresh async cache must pass readiness")
 }
