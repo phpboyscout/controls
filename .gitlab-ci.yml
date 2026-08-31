@@ -16,7 +16,7 @@ include:
     inputs:
       enable_e2e: false
   - component: gitlab.com/phpboyscout/cicd/go-security@v0.39.4
-  - component: gitlab.com/phpboyscout/cicd/colophon@v0.42.0
+  - component: gitlab.com/phpboyscout/cicd/colophon@v0.42.1
     inputs:
       branch: main
       stage: release
