@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.5.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.5.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.4.0...v0.5.0)
+
+### Notes
+
+- Generational[R] gives a service that holds something - a listener, a connection, a supervisor, a session - a fresh value on every Start, and refuses access to a stopped one rather than handing back a stale handle. Reach for it when a restart would otherwise give the second run the first run's resources, which has happened five times across this estate. Use is the only accessor by design. See the new how-to guide, Survive a restart.
+
+- WithStopErr registers a stop function that reports whether it released everything, and the result is recorded in ServiceInfo.StopErr. WithStop is unchanged and equivalent to one returning nil, so nothing that already works needs to move. A panicking stop is now contained and recorded on both stop paths; previously it was swallowed on shutdown and unrecovered on the health-restart path, so the same defect either vanished or killed the process depending on which reached it.
+
+### Features
+
+- **lifecycle**: add Generational, the unit a restart replaces ([282bea2](https://gitlab.com/phpboyscout/go/controls/-/commit/282bea21a07f18e638ae64076da5a35f42c86f7d))
+- **services**: let a stop report that it failed to release ([4df9c80](https://gitlab.com/phpboyscout/go/controls/-/commit/4df9c80384b572e82d8195b3b547bbf5d2ccf2e1))
+
 ## [v0.4.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.4.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.3.2...v0.4.0)
