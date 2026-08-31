@@ -1,7 +1,7 @@
 # .gitlab-ci.yml — pipeline assembled from phpboyscout/cicd components.
 #
 #   merge_request_event → lint, test, security   (the merge gate)
-#   default branch      → releaser-pleaser, zensical-pages deploy
+#   default branch      → colophon, zensical-pages deploy
 #   tag v*.*.*          → zensical-pages docs for the release
 #   schedule            → renovate
 #
@@ -16,9 +16,8 @@ include:
     inputs:
       enable_e2e: false
   - component: gitlab.com/phpboyscout/cicd/go-security@v0.39.4
-  - component: gitlab.com/phpboyscout/cicd/releaser-pleaser@v0.39.4
+  - component: gitlab.com/phpboyscout/cicd/colophon@v0.42.0
     inputs:
-      token: $RELEASER_PLEASER_TOKEN
       branch: main
       stage: release
   - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.39.4
