@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,12 +28,14 @@ func TestWithStopErrRecordsTheResult(t *testing.T) {
 	c := controls.NewController(context.Background(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)))
 
+	started := make(chan struct{})
+
 	c.Register("thing",
-		controls.WithStart(func(context.Context) error { return nil }),
+		controls.WithStart(started1(started)),
 		controls.WithStopErr(func(context.Context) error { return boom }),
 	)
 
-	c.Start()
+	startAndWait(t, c, started)
 
 	stopController(t, c)
 
@@ -53,12 +56,14 @@ func TestWithStopErrRecordsSuccessAsNil(t *testing.T) {
 	c := controls.NewController(context.Background(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)))
 
+	started := make(chan struct{})
+
 	c.Register("thing",
-		controls.WithStart(func(context.Context) error { return nil }),
+		controls.WithStart(started1(started)),
 		controls.WithStopErr(func(context.Context) error { ran.Store(true); return nil }),
 	)
 
-	c.Start()
+	startAndWait(t, c, started)
 
 	stopController(t, c)
 
@@ -81,12 +86,14 @@ func TestWithStopStillWorksUnchanged(t *testing.T) {
 	c := controls.NewController(context.Background(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)))
 
+	started := make(chan struct{})
+
 	c.Register("legacy",
-		controls.WithStart(func(context.Context) error { return nil }),
+		controls.WithStart(started1(started)),
 		controls.WithStop(func(context.Context) { stopped.Store(true) }),
 	)
 
-	c.Start()
+	startAndWait(t, c, started)
 
 	stopController(t, c)
 
@@ -108,12 +115,14 @@ func TestAPanickingStopIsRecordedNotFatal(t *testing.T) {
 	c := controls.NewController(context.Background(),
 		controls.WithLogger(slog.New(slog.DiscardHandler)))
 
+	started := make(chan struct{})
+
 	c.Register("panics",
-		controls.WithStart(func(context.Context) error { return nil }),
+		controls.WithStart(started1(started)),
 		controls.WithStopErr(func(context.Context) error { panic("a defect in stop") }),
 	)
 
-	c.Start()
+	startAndWait(t, c, started)
 
 	stopController(t, c)
 
@@ -121,6 +130,37 @@ func TestAPanickingStopIsRecordedNotFatal(t *testing.T) {
 	// ended the process.
 	if info := findInfo(t, c, "panics"); info.StopErr == nil {
 		t.Error("a panicking stop recorded no error; it must be reported rather than swallowed")
+	}
+}
+
+// started1 returns a StartFunc that closes done once, so a test can wait for the
+// service to have actually run rather than for the controller to have said it
+// is Running.
+func started1(done chan struct{}) controls.StartFunc {
+	var once sync.Once
+
+	return func(context.Context) error {
+		once.Do(func() { close(done) })
+
+		return nil
+	}
+}
+
+// startAndWait starts the controller and waits for the service to have started.
+//
+// Controller.Start is asynchronous: it sets Running and launches services after,
+// so a stop issued the instant it returns can arrive before the service exists
+// and its stop is never called. Waiting on the service's own signal removes the
+// race rather than sleeping through it.
+func startAndWait(t *testing.T, c *controls.Controller, started <-chan struct{}) {
+	t.Helper()
+
+	c.Start()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the service never started")
 	}
 }
 
