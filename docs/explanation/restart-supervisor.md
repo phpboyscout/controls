@@ -104,6 +104,46 @@ error-and-context handler logs them. Two rules keep that channel well-behaved:
   is no way for a late error to block the supervisor forever. This is the D9
   property discussed in [Concurrency & shutdown correctness](concurrency.md).
 
+## What a restart shares, and what it must not
+
+A restart calls your `WithStart` function again. It does not rebuild your
+closure, so **everything that closure captured is shared between the two runs**
+— and that is where this estate has repeatedly gone wrong.
+
+The rule is one sentence:
+
+> Anything single-use or generation-scoped must be built inside the run that
+> consumes it.
+
+A listener, a protocol server, a supervisor, a status cell, a per-tenant handle.
+If it was created once at wiring time and captured, the second run gets the
+first run's corpse.
+
+### The two failures look nothing alike
+
+**The restart cannot work.** A `grpc.Server` cannot serve after `GracefulStop`,
+an `http.Server` cannot after `Shutdown`, and a `controls.Supervisor` returns
+`ErrSupervisorStopped` for ever once stopped. Give any of them a fresh listener
+and it will refuse it — and in gRPC's case close the listener on its way out, so
+the failed run destroys the resource it was handed.
+
+**Or the stopped thing carries on looking healthy.** A status cell captured by
+the closure and never cleared keeps reporting the previous run's error, which
+fails the health threshold, which restarts the service, which reports the same
+stale error. That is a service churning to restart exhaustion without one log
+line naming the cause. A handle whose backing is gone behaves the same way:
+still answering, receiving nothing.
+
+Those are two different properties and neither covers the other. A new
+generation must be **built whole, from one recipe, never revived**. And a
+stopped generation must **refuse further use, loudly**.
+
+### Getting both without writing it yourself
+
+[`Generational[R]`](../how-to/survive-a-restart.md) provides both. A service that
+genuinely captures nothing single-use needs neither, and most services do not —
+this is a rule about the ones that hold something.
+
 ## Related
 
 - [Configure restart policy](../how-to/restart-policy.md) — the practical recipe.

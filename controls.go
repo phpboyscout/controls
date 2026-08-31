@@ -111,6 +111,24 @@ type Message string
 
 // StartFunc is the callback invoked to start a service. It receives a context
 // that is cancelled when the controller shuts down.
+//
+// # A restart calls this again, so what the closure captured is shared
+//
+// Everything this function's closure captured is shared across generations and
+// must be safe to use again. Anything single-use or generation-scoped — a
+// listener, a server, a supervisor, an exit status, a per-tenant handle — must
+// be built INSIDE the run that consumes it, or the second run gets the first
+// run's corpse.
+//
+// The two failures this causes are worth naming, because they look nothing
+// alike. Either the restart cannot work at all, or the stopped thing carries on
+// looking healthy — a status cell that was never cleared, a handle whose
+// backing is gone. So: a stopped generation must refuse further use, loudly,
+// and a new generation is built whole, from one recipe, never revived and never
+// partially reused.
+//
+// [Generational] provides both for a service that needs them. A service that
+// genuinely captures nothing single-use needs neither, and most do not.
 type StartFunc func(context.Context) error
 
 // StopErrFunc stops a service and reports how the stop ended.
@@ -136,6 +154,12 @@ type StopFunc func(context.Context)
 
 // StatusFunc is the callback invoked to check a service's health.
 // Returns nil if healthy, an error otherwise.
+//
+// It must report the CURRENT run. A status cell captured by the closure and
+// never cleared between generations keeps reporting the previous run's failure,
+// which fails the health threshold, which restarts the service, which reports
+// the same stale failure — a service churning to restart exhaustion without one
+// log line naming the cause. See [StartFunc] on what a restart shares.
 type StatusFunc func() error
 
 // ProbeFunc is a health check function for liveness or readiness probes.
