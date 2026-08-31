@@ -447,7 +447,7 @@ func (s *Supervisor) stopChild(ctx context.Context, c *supervisedChild) {
 		go func() {
 			defer close(c.stopDone)
 
-			callStop(ctx, c.spec.Stop)
+			_ = callStopFunc(ctx, c.spec.Stop)
 		}()
 	})
 

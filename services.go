@@ -145,9 +145,11 @@ func (q *Services) monitorHealth(ctx context.Context, srv Service, updateInfo fu
 			if err := srv.Status(); err != nil {
 				healthFailures++
 				if healthFailures >= srv.RestartPolicy.HealthFailureThreshold {
-					srv.Stop(ctx)
+					stopErr := callStop(ctx, srv)
+
 					updateInfo(func(i *ServiceInfo) {
 						i.Error = errors.Wrap(err, "health check failed")
+						i.StopErr = stopErr
 					})
 
 					return true
@@ -445,6 +447,16 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs c
 // on the same mutex, so every health probe would hang exactly when a load
 // balancer most needs a prompt not-ready answer. Registration is impossible once
 // the controller is Stopping, so the snapshot cannot go stale.
+// recordStopErr stores how a stop ended, for a service the caller may no longer
+// be holding.
+func (q *Services) recordStopErr(name string, stopErr error) {
+	if v, ok := q.info.Load(name); ok {
+		info, _ := v.(ServiceInfo)
+		info.StopErr = stopErr
+		q.info.Store(name, info)
+	}
+}
+
 func (q *Services) stop(ctx context.Context) int {
 	q.mu.Lock()
 	services := make([]Service, len(q.services))
@@ -459,7 +471,9 @@ func (q *Services) stop(ctx context.Context) int {
 		go func() {
 			defer close(done)
 
-			callStop(ctx, s.Stop)
+			if stopErr := callStop(ctx, s); stopErr != nil {
+				q.recordStopErr(s.Name, stopErr)
+			}
 		}()
 
 		select {
@@ -478,12 +492,46 @@ func (q *Services) stop(ctx context.Context) int {
 
 // callStop invokes a StopFunc, recovering from a panic so a misbehaving stop
 // cannot crash the shutdown sequence. fn is never nil (defaulted at registration).
-func callStop(ctx context.Context, fn StopFunc) {
+// callStop stops a service and reports how it ended.
+//
+// A panic is contained and converted rather than swallowed. It used to be
+// swallowed here and not contained at all on the health-restart path, which
+// called Stop directly — so the same defect either vanished or killed the
+// process depending on which path reached it.
+func callStop(ctx context.Context, s Service) (err error) {
 	defer func() {
-		_ = recover()
+		if r := recover(); r != nil {
+			err = errors.Newf("controls: stopping %q panicked: %v", s.Name, r)
+		}
 	}()
 
-	fn(ctx)
+	// Both set is a mistake rather than something to merge: calling a service's
+	// stop twice is worse than ignoring the half that cannot report.
+	if s.StopErr != nil {
+		return s.StopErr(ctx)
+	}
+
+	return callStopFunc(ctx, s.Stop)
+}
+
+// callStopFunc runs a plain StopFunc, which cannot report anything, and
+// contains a panic in it.
+//
+// It exists because a Supervisor's Child carries a bare StopFunc: a child is
+// not a Service and giving it one to satisfy this signature would be the tail
+// wagging the dog.
+func callStopFunc(ctx context.Context, fn StopFunc) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Newf("controls: stop panicked: %v", r)
+		}
+	}()
+
+	if fn != nil {
+		fn(ctx)
+	}
+
+	return nil
 }
 
 // callProbe calls fn and returns any error it produces. If fn panics, the panic
@@ -602,6 +650,7 @@ type Service struct {
 	Name          string
 	Start         StartFunc
 	Stop          StopFunc
+	StopErr       StopErrFunc
 	Status        StatusFunc
 	Liveness      ProbeFunc
 	Readiness     ProbeFunc

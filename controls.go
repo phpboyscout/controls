@@ -113,6 +113,23 @@ type Message string
 // that is cancelled when the controller shuts down.
 type StartFunc func(context.Context) error
 
+// StopErrFunc stops a service and reports how the stop ended.
+//
+// A nil error means every resource the run acquired has been released. A
+// non-nil one means the budget expired or release failed, and the service may
+// still be holding something — a listener, a connection, a subscription.
+//
+// # It is recorded, not acted upon
+//
+// The Controller stores the result in [ServiceInfo] and changes nothing else:
+// no restart is refused and no policy is altered on the strength of it. Knowing
+// the answer is the prerequisite, and making a restart depend on it is a
+// behaviour change for every consumer and a separate decision.
+//
+// Before this existed a stop that ignored its context was abandoned at the
+// deadline silently, and nothing anywhere recorded that it had happened.
+type StopErrFunc func(context.Context) error
+
 // StopFunc is the callback invoked to stop a service gracefully. The context
 // carries the shutdown timeout.
 type StopFunc func(context.Context)
@@ -142,6 +159,18 @@ func WithStart(fn StartFunc) ServiceOption {
 func WithStop(fn StopFunc) ServiceOption {
 	return func(s *Service) {
 		s.Stop = fn
+	}
+}
+
+// WithStopErr registers a stop function that can report failure to release.
+//
+// It is purely additive: [WithStop] is unchanged and is equivalent to a
+// [StopErrFunc] that always returns nil, so nothing that already works needs to
+// move. Setting both is a mistake rather than a merge — the error-reporting one
+// wins, because the alternative is calling a service's stop twice.
+func WithStopErr(fn StopErrFunc) ServiceOption {
+	return func(s *Service) {
+		s.StopErr = fn
 	}
 }
 
@@ -207,6 +236,14 @@ type ServiceInfo struct {
 	LastStarted  time.Time
 	LastStopped  time.Time
 	Error        error
+
+	// StopErr is how the last stop ended: nil when every resource was
+	// released, non-nil when it was not, and always nil for a service
+	// registered with [WithStop], which cannot report either way.
+	//
+	// A panic inside a stop is contained and recorded here rather than ending
+	// the process.
+	StopErr error
 }
 
 // ServiceStatus is the health status of a single service, used in HealthReport.
