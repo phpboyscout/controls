@@ -11,16 +11,16 @@
 # (docs/development/specs/2026-07-05-chat-module-extraction.md).
 
 include:
-  - component: gitlab.com/phpboyscout/cicd/go-lint@v0.39.4
-  - component: gitlab.com/phpboyscout/cicd/go-test@v0.39.4
+  - component: gitlab.com/phpboyscout/cicd/go-lint@v0.42.1
+  - component: gitlab.com/phpboyscout/cicd/go-test@v0.42.1
     inputs:
       enable_e2e: false
-  - component: gitlab.com/phpboyscout/cicd/go-security@v0.39.4
+  - component: gitlab.com/phpboyscout/cicd/go-security@v0.42.1
   - component: gitlab.com/phpboyscout/cicd/colophon@v0.42.1
     inputs:
       branch: main
       stage: release
-  - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.39.4
+  - component: gitlab.com/phpboyscout/cicd/zensical-pages@v0.42.1
 
 stages:
   - lint
