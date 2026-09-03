@@ -1,6 +1,6 @@
-# Health, liveness & readiness
+# Health, liveness and readiness
 
-The controller exposes three aggregate reports — `Status()`, `Liveness()`, and
+The controller exposes three aggregate reports: `Status()`, `Liveness()`, and
 `Readiness()`. They look similar but answer different questions, and the
 difference matters when you wire them to an orchestrator. This page explains the
 model.
@@ -13,8 +13,8 @@ conflates:
 - **Liveness** asks *"is this process still alive and making progress?"* A
   failing liveness probe means the process is wedged and should be **restarted**.
 - **Readiness** asks *"can this process accept traffic right now?"* A failing
-  readiness probe means the process is up but temporarily unable to serve — a
-  dependency is down, a cache is warming — and should be **taken out of the load
+  readiness probe means the process is up but temporarily unable to serve (a
+  dependency is down, a cache is warming) and should be **taken out of the load
   balancer**, but *not* restarted.
 
 Restarting a process that is merely *not ready* (say, waiting on a slow database)
@@ -42,7 +42,7 @@ Each report walks two sources and merges them into one `HealthReport`
 
 Any probe or check that reports unhealthy flips `OverallHealthy` to `false`.
 
-A panic in a **service probe** — `WithStatus`, `WithLiveness`, `WithReadiness` —
+A panic in a **service probe** (`WithStatus`, `WithLiveness`, `WithReadiness`)
 called while a report is built is recovered and surfaces as a
 `probe panicked: <value>` error entry rather than crashing the report. That
 recovery does not extend to a standalone `HealthCheck.Check`, nor to a
@@ -61,7 +61,7 @@ report:
 | `CheckTypeLiveness` | ✓ | | ✓ |
 | `CheckTypeBoth` | ✓ | ✓ | ✓ |
 
-`Status()` always includes every check — it is not a gate, just a view.
+`Status()` always includes every check. It is not a gate, just a view.
 
 ## Sync vs. async checks
 
@@ -83,8 +83,8 @@ is left to finish on its own.
 For async checks there is also a **staleness bound**: if the cached result is
 older than three times the check's `Interval`, the refresh loop is assumed to
 have stalled and the cache is no longer trusted. A stale entry is reported as
-`"ERROR"` in every report — it fails readiness closed and is surfaced in
-`Status()` — rather than serving a last-known-healthy result indefinitely.
+`"ERROR"` in every report, failing readiness closed and surfacing in `Status()`,
+rather than serving a last-known-healthy result indefinitely.
 
 ## Readiness is true only while the controller is Running
 
@@ -112,27 +112,25 @@ is watching. See wiki spec
 ## Why readiness also fails closed on an unrun check
 
 An async check has **no cached result** until its first run completes. That run
-begins as soon as the controller starts — the poller does not wait out an
-interval first — so the window is short, but it is real, and a slow first probe
+begins as soon as the controller starts (the poller does not wait out an
+interval first), so the window is short, but it is real, and a slow first probe
 widens it. What should a report say about a check that has not produced a result
 yet?
 
 The answer depends on the report's purpose:
 
-- For **readiness** — a traffic gate — an unknown result is treated as
+- For **readiness**, a traffic gate, an unknown result is treated as
   **not-ready** (`"ERROR"`, `OverallHealthy: false`). This *fails closed*: until
   the check has actually run and proven the dependency healthy, the process is
   kept out of the load balancer. Without this rule there would be a brief startup
   window where traffic is admitted on the *assumption* of health.
-- For **liveness** and **status** — which are not traffic gates — the same
+- For **liveness** and **status**, which are not traffic gates, the same
   unknown result is treated as OK. Reporting "not alive" for a check that simply
   has not run yet would invite a spurious restart.
 
 This asymmetry is deliberate: readiness is conservative because the cost of a
 false "ready" is served errors, while liveness is lenient because the cost of a
-false "not alive" is a needless restart. The mechanics of this rule in the
-supervisor are covered in
-[Concurrency & shutdown correctness](concurrency.md).
+false "not alive" is a needless restart.
 
 ## The three-state result
 
@@ -142,26 +140,27 @@ into the report as:
 | `CheckStatus` | `ServiceStatus.Status` | Contributes unhealthy? |
 |---|---|---|
 | `CheckHealthy` | `"OK"` | no |
-| `CheckDegraded` | `"DEGRADED"` | no — still serving, with a message |
+| `CheckDegraded` | `"DEGRADED"` | no, still serving, with a message |
 | `CheckUnhealthy` | `"ERROR"` | yes |
 
 `CheckDegraded` lets a check flag "needs attention" (a near-full disk, a slow
-upstream) without failing the gate — it carries its `Message` through but leaves
-`OverallHealthy` true.
+upstream) without failing the gate. It carries its `Message` through but leaves
+`OverallHealthy` true. A `Supervisor`'s `HealthCheck` uses exactly this to say a
+child has failed without taking the process out of rotation.
 
 ## What a report does not tell you
 
 A report is the aggregate of the probes you supplied, and nothing more. The
 controller does not inspect whether a service's goroutine is still running, so a
-service with no probe always reports `"OK"` — even after its `StartFunc` has
+service with no probe always reports `"OK"`, even after its `StartFunc` has
 returned an error, and even if it was registered after `Start` and therefore
 never ran. If the entry needs to mean "this service is working", give the service
 a probe that checks something real.
 
 ## Related
 
-- [Add health checks](../how-to/health-checks.md) — the practical recipe.
-- [Health checks and reports reference](../reference/health.md) — every field,
+- [Add health checks](../how-to/health-checks.md): the practical recipe.
+- [Health checks and reports reference](../reference/health.md): every field,
   default and report value.
-- [The restart supervisor](restart-supervisor.md) — how `WithStatus` health drives
+- [The restart supervisor](restart-supervisor.md): how `WithStatus` health drives
   restarts.

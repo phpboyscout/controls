@@ -1,7 +1,7 @@
 # What controls does not do
 
 `controls` supervises service lifecycles and nothing else. Everything below is
-either deliberately absent or a known boundary of the design — worth reading
+either deliberately absent or a known boundary of the design, and worth reading
 before you plan around a capability that is not there. Where there is a way to
 get the effect anyway, it is named.
 
@@ -9,7 +9,7 @@ get the effect anyway, it is named.
 
 The module produces `HealthReport` values. It opens no port, registers no
 HTTP or gRPC handler, and speaks no orchestrator's health protocol. Wiring a
-report onto `/readyz`, a gRPC health service or anything else is your code — a
+report onto `/readyz`, a gRPC health service or anything else is your code, a
 handful of lines, shown in [Add health
 checks](../how-to/health-checks.md#expose-the-reports). This is what keeps the
 dependency graph to one external module, and it is why the same supervisor works
@@ -24,7 +24,7 @@ dependency declaration, no `DependsOn`, and no barrier.
 
 Only shutdown is ordered: stop callbacks run one at a time in reverse
 registration order. If service B must not begin work until service A is up, gate
-it inside B's own `StartFunc` — for example by waiting on a channel A closes.
+it inside B's own `StartFunc`, for example by waiting on a channel A closes.
 
 ## It does not stop the process when a service dies
 
@@ -34,14 +34,17 @@ forwarded on the error channel and logged; the controller stays `Running` and
 every other service carries on. The controller stops only on `Stop()`, on a
 signal it owns via `WithSignals`, or when the parent context completes.
 
-If a failed service should take the process with it, watch for it yourself —
-consume the error channel with `SetErrorsChannel` before `Start`, or poll
-`GetServiceInfo` — and call `Stop()`.
+If a failed service should take the process with it, watch for it yourself
+(consume the error channel with `SetErrorsChannel` before `Start`, or poll
+`GetServiceInfo`) and call `Stop()`. There is no sentinel for "restarts
+exhausted" yet, so recognising that moment on the error channel means matching
+the `max restarts exceeded` message; a typed error is tracked in
+[#11](https://gitlab.com/phpboyscout/go/controls/-/issues/11).
 
 ## A health report is not proof a service is running
 
 Reports aggregate the probes you supplied. A service with no probe always
-reports `"OK"` — including one whose `StartFunc` returned an error minutes ago,
+reports `"OK"`, including one whose `StartFunc` returned an error minutes ago,
 and one registered after `Start` that never ran at all. `controls` does not
 inspect goroutine liveness. Give a service a probe that checks something real if
 you want its report entry to mean anything.
@@ -52,12 +55,13 @@ Panic recovery is deliberately partial, and the boundaries are not symmetrical:
 
 | Callback | Panic behaviour |
 |---|---|
-| `WithStop` | recovered; shutdown continues with the next service |
+| `WithStop` / `WithStopErr` | recovered; recorded on `ServiceInfo.StopErr`, and shutdown continues with the next service |
 | `WithStatus` / `WithLiveness` / `WithReadiness`, called while a report is built | recovered; reported as `probe panicked: <value>` |
-| `WithStart` | **not recovered — the process crashes** |
+| `WithStart` | **not recovered: the process crashes** |
 | `Child.Start`, run by a `Supervisor` | recovered; counted, and fed to the restart policy |
-| `WithStatus`, polled by the restart supervisor | **not recovered — the process crashes** |
-| `HealthCheck.Check` | **not recovered — the process crashes** |
+| `Child.Stop` | recovered |
+| `WithStatus`, polled by the restart supervisor | **not recovered: the process crashes** |
+| `HealthCheck.Check` | **not recovered: the process crashes** |
 
 Recover inside your own function wherever the work can panic.
 
@@ -77,10 +81,15 @@ registered before `Start`; there is no deregistration for either. A
 [`Supervisor`](../how-to/supervise-dynamic-children.md) is the answer when the
 set has to change: its children can be detached at any time, and attached at any
 time before shutdown begins (`Attach` returns `ErrSupervisorStopped` once `Stop`
-has started). Detaching is the deregistration a `Controller` does not have. The `SetX`
-setters exist for construction — they mutate fields the control goroutines read
-without synchronisation, so calling one on a running controller is a race, not a
-supported reconfiguration path.
+has started). Detaching is the deregistration a `Controller` does not have. The
+`SetX` setters exist for construction. They mutate fields the control goroutines
+read without synchronisation, so calling one on a running controller is a race,
+not a supported reconfiguration path.
+
+A `Supervisor` is single-use too: `Start` after `Stop` returns
+`ErrSupervisorStopped`. A service that owns one and must survive its own restart
+builds a fresh supervisor per run, which is what
+[`Generational`](../how-to/survive-a-restart.md) is for.
 
 ## Configurations that are silently inert
 
@@ -92,7 +101,9 @@ Each of these compiles, runs and does nothing:
 - **A `RestartPolicy` on a service whose `StartFunc` returns `nil` and which has
   no `WithStatus` probe.** A clean start is not an exit, so there is nothing to
   restart on; the service simply runs until shutdown.
-- **`WithShutdownTimeout(0)`.** Zero is not "use the default" — it is an
+- **`HealthFailureThreshold` or `HealthCheckInterval` on a `Child`.** A child
+  has no `Status` probe for them to drive.
+- **`WithShutdownTimeout(0)`.** Zero is not "use the default". It is an
   already-expired budget, so stop callbacks are abandoned as soon as they are
   launched and may never run.
 - **Two services registered under the same name.** Both run; both appear in
@@ -100,24 +111,27 @@ Each of these compiles, runs and does nothing:
 - **A health check sharing a name with a service.** `RegisterHealthCheck` only
   checks for collisions among health checks, so this is accepted and produces two
   report entries with the same `name`.
+- **`WithStop` and `WithStopErr` on the same service.** The error-reporting one
+  runs and the plain one is ignored, because calling a service's stop twice
+  would be worse.
 
 ## It will not own OS signals unless you ask, and it cannot share them
 
-Signal disposition is process-global, and `signal.Notify` is additive — every
+Signal disposition is process-global, and `signal.Notify` is additive: every
 registered channel gets a copy. So the controller registers nothing by default,
 and `WithSignals` is for the case where the controller genuinely is the outermost
 layer.
 
 There is no supported configuration in which two things own the signal. Under a
-CLI framework that already turns signals into context cancellation — go-tool-base
-does — passing `WithSignals` gives you two shutdown drivers racing on one
+CLI framework that already turns signals into context cancellation (go-tool-base
+does), passing `WithSignals` gives you two shutdown drivers racing on one
 `Ctrl-C`. Let the outer layer own it and cancel the context you passed to
 `NewController`.
 
 ## You cannot tell from the context why the controller stopped
 
 Since v0.2.0 the controller owns its own cancellation, so `context.Cause(ctx)` is
-`ErrShutdown` for every stop it drives — a direct `Stop()`, a parent
+`ErrShutdown` for every stop it drives: a direct `Stop()`, a parent
 cancellation, an expired parent deadline, or a signal. That is the point: the
 guarantee is unconditional. The cost is that the cause no longer distinguishes
 those triggers. A service that needs to know watches the parent context itself.
@@ -147,21 +161,21 @@ surface is the `*slog.Logger` you inject, the error channel, `GetState()`,
 The one exception is a `Supervisor`, which fires `WithOnFailure` and sends on
 `Failures()` when a child reaches a terminal failure. That is a single
 transition, not an event stream: nothing fires on a start, a restart or a clean
-stop. Keeping instrumentation out is what the dependency-footprint
-guard test enforces — instrument in the layer above, from those signals.
+stop. Keeping instrumentation out is what the dependency-footprint guard test
+enforces. Instrument in the layer above, from those signals.
 
 ## It reads no configuration and ships no mocks
 
 There are no environment variables, config files or flags: every setting is a
 functional option or a struct field, listed in the [reference
-tier](../reference/index.md). And no mocks are generated or published — write a
+tier](../reference/index.md). And no mocks are generated or published. Write a
 stub, or generate one for the [interface](../reference/interfaces.md) your code
 depends on.
 
 ## Related
 
-- [Reference](../reference/index.md) — the options, fields and defaults that do exist.
-- [Architecture & the lifecycle state machine](architecture.md) — the design these
-  boundaries follow from.
-- [Concurrency & shutdown correctness](concurrency.md) — the guarantees that are
-  made, and what each one covers.
+- [Reference](../reference/index.md): the options, fields and defaults that do exist.
+- [Architecture and the lifecycle state machine](architecture.md): the design
+  these boundaries follow from.
+- [Concurrency and shutdown correctness](concurrency.md): the guarantees that
+  are made, and what each one covers.
