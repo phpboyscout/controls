@@ -4,8 +4,9 @@ The controller drives a bounded, ordered shutdown: it cancels the context every
 service shares, runs each `WithStop` in reverse registration order, and abandons
 a stuck stop, or a supervisor whose `WithStart` never returns, at a deadline so
 the shutdown sequence itself can never hang. This guide covers the timeout,
-signal handling, bounding your wait with `WaitContext`, and how a service
-distinguishes a controlled stop from an upstream cancellation.
+learning whether a stop released everything, signal handling, bounding your
+wait with `WaitContext`, and how a service distinguishes a controlled stop from
+an upstream cancellation.
 
 ## The shutdown sequence
 
@@ -82,6 +83,39 @@ controls.WithStop(func(ctx context.Context) {
 	}
 })
 ```
+
+## Know whether a stop released everything
+
+A `WithStop` callback returns nothing, so after an abandoned stop the controller
+knows only that the deadline passed. `WithStopErr` registers a stop that reports
+how it ended, and the controller records the answer on `ServiceInfo.StopErr`:
+
+```go
+c.Register("api",
+	controls.WithStart(serve),
+	controls.WithStopErr(func(ctx context.Context) error {
+		// nil means every resource is released; anything else means the
+		// service may still be holding something.
+		return srv.Shutdown(ctx)
+	}),
+)
+
+// later, after c.Wait()
+info, _ := c.GetServiceInfo("api")
+if info.StopErr != nil {
+	log.Printf("api did not release cleanly: %v", info.StopErr)
+}
+```
+
+The result is recorded, not acted upon: no restart is refused and no policy is
+altered on the strength of it. `WithStop` is unchanged and equivalent to a
+`WithStopErr` that always returns `nil`, so nothing that already works needs to
+move. Set one or the other; with both, only the error-reporting one runs.
+
+A panic inside either kind of stop is contained and lands on `StopErr` too, on
+both paths that call it: shutdown and a health-threshold restart. Before this
+existed, a stop that ignored its context was abandoned at the deadline and
+nothing recorded that it had happened.
 
 ## Bound your wait against a stuck start
 
