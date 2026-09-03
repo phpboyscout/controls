@@ -149,7 +149,8 @@ stopped generation must **refuse further use, loudly**.
 
 ### Getting both without writing it yourself
 
-[`Generational[R]`](../how-to/survive-a-restart.md) provides both. A service that
+[`Generational[R]`](../how-to/survive-a-restart.md) provides both, and its
+[reference page](../reference/generational.md) has the contract. A service that
 genuinely captures nothing single-use needs neither, and most services do not.
 This is a rule about the ones that hold something.
 

@@ -144,9 +144,7 @@ registration receiving signals nobody reads.
 
 The `Supervisor` sentinels and `DefaultFailureBufferSize` are on the
 [Supervisor](supervisor.md#sentinel-errors) page. `Generational`'s four
-sentinels (`ErrNoGeneration`, `ErrGenerationRunning`, `ErrPredecessorLive`,
-`ErrStopTimeout`) are described on
-[Survive a restart](../how-to/survive-a-restart.md).
+sentinels are on the [Generational](generational.md#sentinel-errors) page.
 
 ## Related
 

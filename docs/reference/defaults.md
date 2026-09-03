@@ -67,6 +67,8 @@ time: 1s, 2s, 4s, 8s, 16s, 30s, 30s, … Because each run is far shorter than th
 
 ## Generational defaults
 
+The full contract is on the [Generational](generational.md) page.
+
 | Setting | Default | Changed by | Notes |
 |---|---|---|---|
 | `Release` budget per attempt | **250ms** | not configurable | The disposer retries `Release` on that interval until it returns `nil`. A configurable budget is tracked in [#10](https://gitlab.com/phpboyscout/go/controls/-/issues/10). |
