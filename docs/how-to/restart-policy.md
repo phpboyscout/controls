@@ -18,7 +18,7 @@ c.Register("worker",
 ```
 
 Now, if `runWorker` returns a genuine error while the controller context is
-still live, the supervisor waits a backoff interval and starts it again — up to
+still live, the supervisor waits a backoff interval and starts it again, up to
 `MaxRestarts` consecutive failures.
 
 ## The policy fields
@@ -40,7 +40,7 @@ type RestartPolicy struct {
 - **`MaxRestarts`.** Caps **consecutive** failures (see below), not lifetime
   restarts. It counts *restarts*, so `MaxRestarts: 5` lets the service run six
   times in all. When exceeded, the supervisor gives up on the service and
-  forwards a `max restarts exceeded` error — wrapping the last `StartFunc` error
+  forwards a `max restarts exceeded` error, wrapping the last `StartFunc` error
   when there was one. `0` means unlimited.
 - **The controller keeps running either way.** Giving up on a service does not
   stop the process or the other services; the error is recorded on
@@ -85,15 +85,22 @@ increments a counter; a single success resets it. When the counter reaches
 > **Which restart path calls `WithStop`.** A health-threshold restart stops the
 > service first: `WithStop` runs before each restart, and again at shutdown, so
 > it must be idempotent. An **error**-triggered restart does not call `WithStop`
-> at all — the `StartFunc` has already returned, and the supervisor goes straight
+> at all. The `StartFunc` has already returned, and the supervisor goes straight
 > to the backoff wait. Release resources on the way out of your `StartFunc` if
 > the error path needs cleaning up.
+
+> **The probe must report the current run.** A restart calls `WithStart` again
+> but reuses your `WithStatus` closure, so a status cell it captured and never
+> cleared keeps reporting the previous run's failure, which trips the threshold
+> again, which restarts again. That is a service churning to exhaustion with no
+> log line naming the cause. See
+> [What a restart shares](../explanation/restart-supervisor.md#what-a-restart-shares-and-what-it-must-not).
 
 ## Consecutive failures and the reset window
 
 `MaxRestarts` counts **consecutive** failures, not the lifetime total. A service
 that fails, restarts, and then runs healthily for `RestartResetInterval` has its
-counter reset to zero — so a service that flakes once an hour is never
+counter reset to zero, so a service that flakes once an hour is never
 permanently killed by an old failure.
 
 The reset window defaults to 30s (`DefaultRestartResetInterval`). Tune it with
@@ -109,11 +116,12 @@ c.Register("flaky",
 
 > **`WithRestartResetInterval` implies a policy.** If the service has no
 > `RestartPolicy` yet, this option creates a default one so the interval takes
-> effect. Order does not matter — apply it before or after `WithRestartPolicy`.
+> effect, and a default policy has unlimited `MaxRestarts`. Order does not
+> matter; apply it before or after `WithRestartPolicy`.
 
 ## Exempt expected terminal errors
 
-Some errors are a *normal* end of run, not a failure — the canonical example is
+Some errors are a *normal* end of run, not a failure. The canonical example is
 `http.ErrServerClosed`, returned by `ListenAndServe` after a graceful
 `Shutdown`. Register a controller-wide predicate with `WithValidError` so the
 supervisor treats a matching error as a clean stop: it is neither counted toward
@@ -154,9 +162,11 @@ fmt.Printf("restarts=%d lastErr=%v\n", info.RestartCount, info.Error)
 
 ## Related
 
-- [The restart supervisor](../explanation/restart-supervisor.md) — the run-outcome
+- [The restart supervisor](../explanation/restart-supervisor.md): the run-outcome
   classification and why a clean start is never restarted.
-- [Services and restart policy reference](../reference/services.md) — every field
+- [Survive a restart](survive-a-restart.md): what to do when the service holds
+  something a second run cannot reuse.
+- [Services and restart policy reference](../reference/services.md): every field
   with its default, and what a zero value selects.
-- [Add health checks](health-checks.md) — the `WithStatus` probe the health
+- [Add health checks](health-checks.md): the `WithStatus` probe the health
   threshold depends on.
