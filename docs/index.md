@@ -128,12 +128,14 @@ The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
     - [Health, liveness and readiness](explanation/health-model.md)
     - [The restart supervisor](explanation/restart-supervisor.md)
     - [Concurrency and shutdown correctness](explanation/concurrency.md)
+    - [Registered means required](explanation/supervision.md)
     - [What controls does not do](explanation/limitations.md)
 - **[Reference](reference/index.md)** lists every option, field and default,
   with what happens when it is set wrongly:
     - [Controller](reference/controller.md)
     - [Services and restart policy](reference/services.md)
     - [Supervisor](reference/supervisor.md)
+    - [Generational](reference/generational.md)
     - [Health checks and reports](reference/health.md)
     - [Defaults and timings](reference/defaults.md)
     - [Interfaces](reference/interfaces.md)
