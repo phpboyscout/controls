@@ -113,8 +113,12 @@ go get gitlab.com/phpboyscout/go/controls
 
 The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
 
-- **[Getting started](tutorials/getting-started.md)** is a learning-oriented
-  walkthrough: register one service, start it, and shut down cleanly on Ctrl-C.
+- **Tutorials** are learning-oriented walkthroughs:
+    - [Getting started](tutorials/getting-started.md): register one service,
+      start it, and shut down cleanly on Ctrl-C.
+    - [Supervise workers that come and go](tutorials/supervise-workers.md):
+      add a set of workers that changes while the process runs, and watch a
+      failed one leave the process ready.
 - **How-to guides** are task-oriented recipes:
     - [Register and run services](how-to/register-services.md)
     - [Add health checks](how-to/health-checks.md)
