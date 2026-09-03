@@ -5,8 +5,8 @@
 # page (this file included) to the site root verbatim, so it lands at
 # https://controls.go.phpboyscout.uk/_redirects.
 #
-# Zensical has no redirects plugin — it implements search, offline, mike and
-# mkdocstrings only — so this file is the mechanism. Keep an entry here for the
+# Zensical has no redirects plugin (it implements search, offline, mike and
+# mkdocstrings only), so this file is the mechanism. Keep an entry here for the
 # lifetime of any URL that was ever published; other projects' docs and blog
 # posts link to these paths.
 
