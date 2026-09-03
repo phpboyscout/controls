@@ -104,6 +104,8 @@ context.
 
 ## Related
 
+- [Generational reference](../reference/generational.md): every field, method
+  and sentinel, and what each call does out of order.
 - [The restart supervisor](../explanation/restart-supervisor.md): when a restart
   happens at all.
 - [Register services](register-services.md): the options this composes with.
