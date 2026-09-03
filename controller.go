@@ -176,8 +176,9 @@ func (c *Controller) Register(id string, opts ...ServiceOption) {
 }
 
 // RegisterHealthCheck adds a standalone health check to the controller.
-// Must be called before Start(). The check name must be unique across
-// both services and health checks.
+// Must be called before Start(). The check name must be unique among health
+// checks; it is not checked against service names, so a check that shares a
+// name with a service is accepted and the report carries both entries.
 func (c *Controller) RegisterHealthCheck(check HealthCheck) error {
 	if c.GetState() != NeverStarted {
 		return errors.New("cannot register health check after start")
