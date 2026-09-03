@@ -1,7 +1,7 @@
 # Health checks and reports reference
 
 Health reaches the reports from two places: probes attached to a service
-(`WithStatus`, `WithLiveness`, `WithReadiness` — see
+(`WithStatus`, `WithLiveness`, `WithReadiness`; see
 [Services](services.md#statusfunc-and-probefunc-func-error)) and standalone
 `HealthCheck` values registered with `RegisterHealthCheck`. This page is the
 field-by-field reference for the standalone checks and for the report values all
@@ -22,16 +22,16 @@ type HealthCheck struct {
 | Field | Required | Zero value means | What it controls |
 |---|---|---|---|
 | `Name` | yes | — | The `name` in the report entry, and the key for `GetCheckResult`. Must be unique **among health checks**; `RegisterHealthCheck` returns `duplicate health check name: "<name>"` otherwise. |
-| `Check` | yes | **crashes the process** — a nil `Check` is called and panics on its first run | The probe. The `ctx` it receives already carries `Timeout`. |
+| `Check` | yes | **crashes the process**: a nil `Check` is called and panics on its first run | The probe. The `ctx` it receives already carries `Timeout`. |
 | `Timeout` | no | use the default (5s) | Bounds a single run of `Check`. |
-| `Interval` | no | synchronous — run inline on every report that includes it | Non-zero makes the check asynchronous: a background goroutine polls it and reports read the cached result. |
+| `Interval` | no | synchronous: run inline on every report that includes it | Non-zero makes the check asynchronous: a background goroutine polls it and reports read the cached result. |
 | `Type` | no | `CheckTypeReadiness` | Which reports the check appears in. |
 
 Registration rules, both enforced by the returned `error`:
 
-- `cannot register health check after start` — checks must be registered while
+- `cannot register health check after start`: checks must be registered while
   the controller is still in the `NeverStarted` state.
-- `duplicate health check name: "<name>"` — only checked against other health
+- `duplicate health check name: "<name>"`: only checked against other health
   checks. **A check may silently share a name with a registered service**, in
   which case the report contains two entries with the same `name` and consumers
   keying on it will collide.
@@ -46,10 +46,11 @@ Registration rules, both enforced by the returned `error`:
 | `GetCheckResult` before any report | `false` | `true` once the first run has completed |
 | Staleness | not applicable | a cached result older than **3 × `Interval`** is reported `ERROR` with `cached health result is stale` |
 
-An async check's first run starts as soon as the controller starts — the window
-in which it has no result is the duration of that first run, not a whole
-interval. During that window `Readiness()` reports it as not-ready and
-`Status()`/`Liveness()` treat it as OK.
+An async check's first run starts as soon as the controller starts, so the
+window in which it has no result is the duration of that first run, not a whole
+interval. During that window `Readiness()` reports it as not-ready with
+`check has not completed its first run`, and `Status()` and `Liveness()` treat
+it as OK.
 
 Every run, sync or async, is executed in its own goroutine and raced against the
 timeout. A `Check` that ignores its context cannot hang a report or wedge the
@@ -82,14 +83,14 @@ type CheckResult struct {
 |---|---|
 | `Status` | One of `CheckHealthy`, `CheckDegraded`, `CheckUnhealthy`. The zero value is `CheckHealthy`, so an empty `CheckResult{}` reports OK. |
 | `Message` | Free text. Surfaces as the `error` field of the report entry for `DEGRADED` and `ERROR`; ignored for `OK`. |
-| `Timestamp` | **Set by the controller, not by you.** Whatever your `Check` puts here is overwritten with the time the run completed — the value the staleness bound is measured against. |
+| `Timestamp` | **Set by the controller, not by you.** Whatever your `Check` puts here is overwritten with the time the run completed, which is the value the staleness bound is measured against. |
 
 ## CheckStatus in the report
 
 | `CheckStatus` | `ServiceStatus.Status` | `OverallHealthy` |
 |---|---|---|
 | `CheckHealthy` | `"OK"` | unchanged |
-| `CheckDegraded` | `"DEGRADED"`, with `Message` in `error` | unchanged — degraded still passes every gate, including readiness |
+| `CheckDegraded` | `"DEGRADED"`, with `Message` in `error` | unchanged: degraded still passes every gate, including readiness |
 | `CheckUnhealthy` | `"ERROR"`, with `Message` in `error` | `false` |
 
 ## CheckType routing
@@ -138,7 +139,7 @@ Marshalled, a report looks like this:
 - `error` is omitted when empty, and carries the probe's error text or the check
   result's `Message`.
 - Service entries come first, in registration order, followed by health-check
-  entries in Go map order — **the order of check entries is not stable between
+  entries in Go map order. **The order of check entries is not stable between
   calls.** Match on `name`, not on position.
 - `overall_healthy` is `false` if any entry is `ERROR`, and unaffected by
   `DEGRADED`.
@@ -146,23 +147,24 @@ Marshalled, a report looks like this:
 ## What each report actually asserts
 
 A report is the aggregate of the probes you supplied. It is **not** evidence that
-a service's goroutine is running. A service with no probe always reports `"OK"`
-— including one whose `StartFunc` has already returned an error, and one
+a service's goroutine is running. A service with no probe always reports `"OK"`,
+including one whose `StartFunc` has already returned an error, and one
 registered after `Start` that was never started at all. If you need the report to
 reflect that a service is alive, give it a probe that checks something real.
 
 Calling a report method **after** shutdown has completed does not re-run the
-checks: the controller context is cancelled, so each one records `"ERROR"` with
-`health check cancelled: the controller is shutting down` without the consumer's
-`Check` being invoked. Read the reports while the controller is running; since
-readiness is gated on the lifecycle state, a report taken later says little
-beyond the state itself.
+checks. The controller context is cancelled, so each sync check records
+`"ERROR"` with `health check cancelled: the controller is shutting down` without
+the consumer's `Check` being invoked, and each async check serves its last
+cached result until that goes stale. Read the reports while the controller is
+running; since readiness is gated on the lifecycle state, a report taken later
+says little beyond the state itself.
 
 ## Related
 
-- [Add health checks](../how-to/health-checks.md) — the task-oriented recipe,
+- [Add health checks](../how-to/health-checks.md): the task-oriented recipe,
   including wiring a report onto an HTTP endpoint.
-- [Health, liveness & readiness](../explanation/health-model.md) — why readiness
-  fails closed and liveness does not.
-- [Defaults and timings](defaults.md) — check timeout, interval and staleness
+- [Health, liveness and readiness](../explanation/health-model.md): why
+  readiness fails closed and liveness does not.
+- [Defaults and timings](defaults.md): check timeout, interval and staleness
   bound alongside every other default.

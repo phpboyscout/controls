@@ -73,10 +73,10 @@ abandoned rather than allowed to hold shutdown open, which is the same bargain a
 
 **`HealthCheck(name)` is a constructor, not a probe.** It returns a
 `CheckTypeReadiness` check to register with a `Controller` alongside the
-supervisor. Give it a name distinct from the service registration: the
-controller's contract is that a check name is unique across both services and
-health checks, but only the health-check map is enforced, so a collision is
-accepted and reported twice.
+supervisor. Give it a name distinct from the service registration:
+`RegisterHealthCheck` checks a name only against other health checks, so a
+collision with the service is accepted and the report carries both entries
+under one name.
 
 ## `Child`
 

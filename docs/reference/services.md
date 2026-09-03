@@ -20,8 +20,8 @@ call it:
 - **Registration after `Start` is not supervised.** The service is appended and
   logged as `WARN "Register called after Start; service will not be supervised"`,
   but its `StartFunc` is never called, its `StopFunc` never runs, and no restart
-  policy applies. It still appears in `Status()`, `Liveness()` and `Readiness()`
-  — as `"OK"` if it has no probe. Treat that warning as a bug in your wiring.
+  policy applies. It still appears in `Status()`, `Liveness()` and `Readiness()`,
+  as `"OK"` if it has no probe. Treat that warning as a bug in your wiring.
 - **Both lifecycle callbacks are optional.** A service with no `WithStart` gets a
   no-op that returns `nil`; one with no `WithStop` gets a no-op stop. Neither can
   be nil at run time, so neither can panic on a nil call.
@@ -32,19 +32,20 @@ call it:
 |---|---|---|---|
 | `WithStart` | `func(context.Context) error` | no-op returning `nil` | Called once per run by the supervisor. The context is the controller's, cancelled at shutdown with cause `ErrShutdown`. |
 | `WithStop` | `func(context.Context)` | no-op | Called during shutdown in reverse registration order, and before each health-triggered restart. The context carries the shutdown deadline. |
+| `WithStopErr` | `func(context.Context) error` | none | A stop that reports whether every resource was released. The result lands on `ServiceInfo.StopErr` and changes nothing else. If both `WithStop` and `WithStopErr` are set, only `WithStopErr` runs. |
 | `WithStatus` | `func() error` | none | General health signal: feeds `Status()`, is the fallback for `Liveness()`/`Readiness()`, and is the probe the restart supervisor polls. |
 | `WithLiveness` | `func() error` | falls back to `WithStatus` | Feeds `Liveness()` only. |
 | `WithReadiness` | `func() error` | falls back to `WithStatus` | Feeds `Readiness()` only. |
 | `WithRestartPolicy` | `RestartPolicy` (by value) | no restarts at all | The policy is copied at registration; later mutation of your struct has no effect. |
-| `WithRestartResetInterval` | `time.Duration` | `DefaultRestartResetInterval` (30s) | Sets `RestartPolicy.RestartResetInterval`, creating a zero-valued policy first if the service has none — so this option alone **enables restarts, with every other field at its default, including unlimited `MaxRestarts`**. Order relative to `WithRestartPolicy` does not matter. |
+| `WithRestartResetInterval` | `time.Duration` | `DefaultRestartResetInterval` (30s) | Sets `RestartPolicy.RestartResetInterval`, creating a zero-valued policy first if the service has none, so this option alone **enables restarts, with every other field at its default, including unlimited `MaxRestarts`**. Order relative to `WithRestartPolicy` does not matter. |
 
 ## What each callback must honour
 
-### StartFunc — `func(ctx context.Context) error`
+### StartFunc: `func(ctx context.Context) error`
 
 | Return | Classified as | Restarted? | Forwarded on the error channel? |
 |---|---|---|---|
-| `nil` | clean start — the service is serving in the background | never | no |
+| `nil` | clean start: the service is serving in the background | never | no |
 | any error while `ctx` is already cancelled, or `context.Canceled` | cancelled | never | no |
 | an error matching the `WithValidError` predicate | cancelled | never | no |
 | any other non-nil error | failure | yes, if a `RestartPolicy` is attached | yes |
@@ -59,10 +60,16 @@ cancellation.
 Unlike stop callbacks and health probes, start callbacks have no recovery
 wrapper. Recover inside your own function if the work can panic.
 
-### StopFunc — `func(ctx context.Context)`
+**A restart calls it again with the same closure.** Anything the closure
+captured is shared between runs, so a listener, a server or a supervisor built
+at wiring time is the previous run's by the second call. Build single-use things
+inside the run, or wrap them in a
+[`Generational`](../how-to/survive-a-restart.md).
 
-- The context is derived from `context.Background()` with the shutdown timeout —
-  not from the already-cancelled controller context — so `http.Server.Shutdown`
+### StopFunc: `func(ctx context.Context)`
+
+- The context is derived from `context.Background()` with the shutdown timeout,
+  not from the already-cancelled controller context, so `http.Server.Shutdown`
   and friends can still drain in-flight work.
 - **It may be called more than once**, and must be idempotent. Shutdown calls it
   once; a health-threshold restart calls it again before every restart of that
@@ -70,12 +77,23 @@ wrapper. Recover inside your own function if the work can panic.
 - **It is not called between error-triggered restarts.** When a `StartFunc`
   returns a genuine error and the policy restarts the service, `StopFunc` does
   not run in between; only a health-threshold restart stops the service first.
-- A panic inside a `StopFunc` **is** recovered, and the shutdown sequence
-  continues with the next service.
+- A panic inside a `StopFunc` **is** recovered, recorded on
+  `ServiceInfo.StopErr`, and the shutdown sequence continues with the next
+  service.
 - Ignoring the context does not hang shutdown: the callback is abandoned at the
   deadline and left to finish on its own. The work it was doing is not completed.
 
-### StatusFunc and ProbeFunc — `func() error`
+### StopErrFunc: `func(ctx context.Context) error`
+
+Everything above, plus a return value. `nil` means every resource the run
+acquired has been released; non-nil means the budget expired or release failed,
+and the service may still be holding something. The controller stores the
+answer on `ServiceInfo.StopErr` and does nothing else with it: no restart is
+refused and no policy is altered on its strength. Before it existed, a stop that
+ignored its context was abandoned at the deadline and nothing recorded that it
+had happened.
+
+### StatusFunc and ProbeFunc: `func() error`
 
 - Return `nil` for healthy, any error for unhealthy. The error text is copied
   into the report entry.
@@ -87,6 +105,9 @@ wrapper. Recover inside your own function if the work can panic.
 - **A panic in a `WithStatus` probe polled by the restart supervisor is not
   recovered and crashes the process.** The recovery wrapper is applied on the
   report path only.
+- **It must report the current run.** A status cell the closure captured and
+  never cleared between restarts keeps reporting the previous run's failure,
+  which trips the health threshold again.
 
 ## RestartPolicy fields
 
@@ -114,6 +135,10 @@ Attaching a policy is what enables restarts at all. Without one, a `StartFunc`
 error is recorded in `ServiceInfo`, forwarded on the error channel, and the
 service is left stopped.
 
+The same type governs a `Supervisor`'s children, read through the same helpers,
+with `HealthFailureThreshold` and `HealthCheckInterval` inert there because a
+child has no `Status` probe. See the [Supervisor reference](supervisor.md#child).
+
 ## What the supervisor does when restarts run out
 
 When the consecutive-failure counter reaches `MaxRestarts`, the supervisor stops
@@ -125,8 +150,11 @@ supervising that service and records an error:
   the health failure was recorded on `ServiceInfo.Error` rather than returned.
 
 That error is stored on `ServiceInfo.Error` and forwarded on the error channel.
-**The controller keeps running.** A service exhausting its restarts — or failing
-with no policy at all — never shuts the process down; the controller stops only
+There is no sentinel for it yet, so a consumer that wants to recognise the
+moment matches the message; a typed error is tracked in
+[#11](https://gitlab.com/phpboyscout/go/controls/-/issues/11).
+**The controller keeps running.** A service exhausting its restarts, or failing
+with no policy at all, never shuts the process down; the controller stops only
 on `Stop()`, a signal it owns, or completion of the parent context.
 
 **What it does change is readiness, but only if the service never started.** A
@@ -147,6 +175,7 @@ type ServiceInfo struct {
 	LastStarted  time.Time
 	LastStopped  time.Time
 	Error        error
+	StopErr      error
 }
 ```
 
@@ -157,15 +186,16 @@ type ServiceInfo struct {
 | `Name` | The id passed to `Register`. |
 | `RestartCount` | **Consecutive** failures so far, not lifetime restarts. Reset to zero when a run lasts at least `RestartResetInterval`. |
 | `LastStarted` | When the most recent run began. |
-| `LastStopped` | When the most recent run returned. Set on every return, including a clean start that is still serving in the background — it is not evidence the service has stopped. |
+| `LastStopped` | When the most recent run returned. Set on every return, including a clean start that is still serving in the background, so it is not evidence the service has stopped. |
 | `Error` | The most recent classified error, or the `max restarts exceeded` wrapper once the supervisor gave up. `nil` after a clean run. |
+| `StopErr` | How the last stop ended: `nil` when every resource was released, non-nil when it was not (including a recovered panic), and always `nil` for a service registered with `WithStop`, which cannot report either way. |
 
 ## Ordering guarantees
 
 - **Startup is concurrent.** One supervisor goroutine is launched per service in
   registration order; the controller does not wait for a `StartFunc` to return
   or a probe to pass before launching the next. There is no dependency ordering
-  or readiness gate between services — gate inside your own `StartFunc` if you
+  or readiness gate between services. Gate inside your own `StartFunc` if you
   need one.
 - **Shutdown is sequential and reversed.** Stop callbacks run one at a time in
   reverse registration order: register `database` then `http-api`, and `http-api`
@@ -173,7 +203,7 @@ type ServiceInfo struct {
 
 ## Related
 
-- [Configure restart policy](../how-to/restart-policy.md) — the task-oriented recipe.
-- [The restart supervisor](../explanation/restart-supervisor.md) — why a clean
+- [Configure restart policy](../how-to/restart-policy.md): the task-oriented recipe.
+- [The restart supervisor](../explanation/restart-supervisor.md): why a clean
   start is never restarted.
-- [Defaults and timings](defaults.md) — the same defaults alongside every other one.
+- [Defaults and timings](defaults.md): the same defaults alongside every other one.

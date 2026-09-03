@@ -21,7 +21,7 @@ usefully, the methods that are on none of them.
 
 ## Methods that are on no interface
 
-Depending on `Controllable` — the widest interface — still does not give you:
+Depending on `Controllable`, the widest interface, still does not give you:
 
 | Method | Why it matters |
 |---|---|
@@ -44,8 +44,8 @@ Depending on `Controllable` — the widest interface — still does not give you
 | does several of the above | `Controllable`, or `*controls.Controller` |
 
 Production wiring is usually simplest with the concrete `*controls.Controller`;
-the interfaces earn their keep at test seams. **The module ships no mocks** —
-generate one for the interface you depend on, or hand-write a stub. See [Test
+the interfaces earn their keep at test seams. **The module ships no mocks.**
+Generate one for the interface you depend on, or hand-write a stub. See [Test
 services and mock the controller](../how-to/testing.md).
 
 ## Option types
@@ -53,23 +53,27 @@ services and mock the controller](../how-to/testing.md).
 | Type | Signature | Who can write one |
 |---|---|---|
 | `ControllerOpt` | `func(Configurable)` | Anyone, but a third-party option can only call the six `Configurable` setters. `WithValidError` reaches further through an unexported interface, so its behaviour cannot be reproduced outside the package. |
-| `ServiceOption` | `func(*Service)` | Anyone. `Service` and all its fields are exported, so you can write your own service options — `func(s *controls.Service) { s.Name = ... }` is legal. |
+| `ServiceOption` | `func(*Service)` | Anyone. `Service` and all its fields are exported, so you can write your own service options; `func(s *controls.Service) { s.Name = ... }` is legal. |
+| `SupervisorOption` | `func(*Supervisor)` | Anyone can write the signature, but `Supervisor` has no exported fields, so only the package's own `WithOnFailure` can do anything with it. |
 
 ## Function types
 
 | Type | Signature | Used by |
 |---|---|---|
-| `StartFunc` | `func(context.Context) error` | `WithStart` |
-| `StopFunc` | `func(context.Context)` | `WithStop` |
+| `StartFunc` | `func(context.Context) error` | `WithStart`, `Child.Start`, `Supervisor.Start` |
+| `StopFunc` | `func(context.Context)` | `WithStop`, `Child.Stop`, `Supervisor.Stop` |
+| `StopErrFunc` | `func(context.Context) error` | `WithStopErr`, `Generational.Stop` |
 | `StatusFunc` | `func() error` | `WithStatus` |
-| `ProbeFunc` | `func() error` | `WithLiveness`, `WithReadiness` |
-| `ValidErrorFunc` | `func(error) bool` | `WithValidError` |
+| `ProbeFunc` | `func() error` | `WithLiveness`, `WithReadiness`, `Supervisor.Readiness` |
+| `ValidErrorFunc` | `func(error) bool` | `WithValidError`, `Child.ValidError` |
 
 `StatusFunc` and `ProbeFunc` are separate named types with identical underlying
-signatures; a plain `func() error` satisfies either.
+signatures; a plain `func() error` satisfies either. `StopErrFunc` is what a
+`StopFunc` would be if it could report whether every resource was released;
+`WithStop` is equivalent to a `WithStopErr` that always returns `nil`.
 
 ## Related
 
-- [Test services and mock the controller](../how-to/testing.md) — how to use
+- [Test services and mock the controller](../how-to/testing.md): how to use
   these at a test seam.
-- [Controller](controller.md) — what each method does.
+- [Controller](controller.md): what each method does.
