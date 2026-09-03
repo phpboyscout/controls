@@ -7,13 +7,13 @@ the narrower interfaces beside it) let you substitute a fake.
 
 > **Signals are already off.** A controller installs no `SIGINT`/`SIGTERM`
 > handler unless you ask for one, so a test needs no option to stay out of
-> process-wide state — just never pass `WithSignals`. Drive shutdown explicitly
+> process-wide state. Just never pass `WithSignals`. Drive shutdown explicitly
 > with `Stop()`, or by cancelling the context you constructed it with.
 
 ## Test your Start/Stop/Status functions directly
 
-`StartFunc`, `StopFunc`, and `StatusFunc` are plain functions — the simplest test
-calls them without a controller at all:
+`StartFunc`, `StopFunc`, and `StatusFunc` are plain functions, so the simplest
+test calls them without a controller at all:
 
 ```go
 func TestStatusProbe(t *testing.T) {
@@ -52,7 +52,7 @@ func TestServiceLifecycle(t *testing.T) {
 	c.Start()
 	require.Eventually(t, started.Load, time.Second, time.Millisecond)
 
-	// Health is read from the aggregated report — not a channel.
+	// Health is read from the aggregated report, not a channel.
 	require.True(t, c.Readiness().OverallHealthy)
 
 	c.Stop()
@@ -61,16 +61,21 @@ func TestServiceLifecycle(t *testing.T) {
 }
 ```
 
-Note that health is inspected with `Status()` / `Liveness()` / `Readiness()`,
+Note that health is inspected with `Status()`, `Liveness()` and `Readiness()`,
 which return a `HealthReport`. A `StatusFunc` returns `nil` when healthy and an
 error otherwise; there is no health *channel* to read in application code.
+
+The suite in this repository times shutdown and restart against the wall clock
+rather than a fake one, and a test of yours that does the same will be sensitive
+to a loaded CI runner. Give `require.Eventually` a generous ceiling and a short
+poll rather than a fixed `time.Sleep`.
 
 ## Mock the controller with the `Controllable` interface
 
 Production code should hold the concrete `*controls.Controller`. But code that
 merely *registers services against* a controller can depend on an interface and
 be tested with a fake. The module ships no mocks, so generate one for the
-interface you depend on (e.g. with [mockery](https://vektra.github.io/mockery/)),
+interface you depend on (for example with [mockery](https://vektra.github.io/mockery/)),
 or hand-write a small stub:
 
 ```go
@@ -92,35 +97,35 @@ func TestWireServices(t *testing.T) {
 ### Depend on the narrowest interface
 
 `Controllable` is the full surface. Prefer a narrower interface when your code
-only needs part of it — it makes the dependency (and the mock) smaller:
+only needs part of it, which makes the dependency (and the mock) smaller:
 
 | Interface | Use when your code only needs to… |
 |---|---|
 | `Runner` | `Start`, `Stop`, `Register` services, and query `IsRunning`/`IsStopped`/`IsStopping` |
-| `StateAccessor` | read/set the lifecycle `State`, or read the context or logger |
+| `StateAccessor` | read or set the lifecycle `State`, or read the context or logger |
 | `Configurable` | apply configuration (logger, shutdown timeout, wait group, channels) |
 | `ChannelProvider` | access the message, error and signal channels |
 | `HealthReporter` | read `Status()` / `Liveness()` / `Readiness()` reports, or `GetServiceInfo` |
 | `HealthCheckReporter` | everything in `HealthReporter`, plus `GetCheckResult` for a named check |
 
-> [!important]
-> **`Wait` and `WaitContext` are on the concrete `*Controller`, not on any
-> interface** — including `Controllable`. Code that has to block until shutdown
-> completes therefore cannot take `Controllable` alone; accept
-> `*controls.Controller`, or declare a one-method interface of your own:
->
-> ```go
-> type waiter interface{ Wait() }
-> ```
+!!! warning "`Wait` and `WaitContext` are on the concrete `*Controller`, not on any interface"
+
+    That includes `Controllable`. Code that has to block until shutdown
+    completes therefore cannot take `Controllable` alone; accept
+    `*controls.Controller`, or declare a one-method interface of your own:
+
+    ```go
+    type waiter interface{ Wait() }
+    ```
 
 Reserve the concrete `*controls.Controller` for production wiring; reach for the
 interfaces at test seams.
 
 ## Related
 
-- [Interfaces reference](../reference/interfaces.md) — every interface's methods,
+- [Interfaces reference](../reference/interfaces.md): every interface's methods,
   and the methods (`Wait`, `WaitContext`, `RegisterHealthCheck`, `WaitGroup`) that
   are on none of them.
-- [Register & run services](register-services.md)
+- [Register and run services](register-services.md)
 - [Add health checks](health-checks.md)
-- [Handle graceful shutdown & signals](graceful-shutdown.md)
+- [Handle graceful shutdown and signals](graceful-shutdown.md)

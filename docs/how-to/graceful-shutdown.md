@@ -1,11 +1,11 @@
-# Handle graceful shutdown & signals
+# Handle graceful shutdown and signals
 
 The controller drives a bounded, ordered shutdown: it cancels the context every
-service shares, runs each `WithStop` in reverse registration order, and force-
-abandons a stuck stop — or a supervisor whose `WithStart` never returns — at a
-deadline so the shutdown sequence itself can never hang. This guide covers the
-timeout, signal handling, bounding your wait with `WaitContext`, and how a
-service distinguishes a controlled stop from an upstream cancellation.
+service shares, runs each `WithStop` in reverse registration order, and abandons
+a stuck stop, or a supervisor whose `WithStart` never returns, at a deadline so
+the shutdown sequence itself can never hang. This guide covers the timeout,
+signal handling, bounding your wait with `WaitContext`, and how a service
+distinguishes a controlled stop from an upstream cancellation.
 
 ## The shutdown sequence
 
@@ -16,11 +16,11 @@ cancellation, shutdown always runs the same sequence:
    `UnableToStart`. Readiness is already false in both cases from this point on,
    so traffic stops being routed here before any service is stopped.
 2. Detach OS-signal handling.
-3. Cancel the controller context with the cause `ErrShutdown` — unblocking every
+3. Cancel the controller context with the cause `ErrShutdown`, unblocking every
    `WithStart` that waits on `ctx.Done()`.
 4. Run each `WithStop` in **reverse registration order**, bounded by the shutdown
    timeout.
-5. Await supervisor exit with the *remaining* shutdown budget, logging a WARN
+5. Await supervisor exit with the *remaining* shutdown budget, logging a `WARN`
    naming any service whose `WithStart` failed to return (it is abandoned).
 6. Transition to `Stopped` and release `Wait()`.
 
@@ -36,26 +36,26 @@ c := controls.NewController(ctx,
 ```
 
 Each `WithStop` receives a context carrying this deadline. A well-behaved stop
-respects it — for example, `http.Server.Shutdown(ctx)` drains in-flight requests
+respects it. `http.Server.Shutdown(ctx)`, for example, drains in-flight requests
 until the deadline, then returns.
 
-> **Zero is not "use the default".** `WithShutdownTimeout(0)` — or any negative
-> duration — creates a budget that has already expired, so every stop callback is
+> **Zero is not "use the default".** `WithShutdownTimeout(0)`, or any negative
+> duration, creates a budget that has already expired, so every stop callback is
 > abandoned the instant it is launched and may never run at all. Omit the option
 > if you want the 5s default.
 
 > **A `StopFunc` can run more than once, so make it idempotent.** Shutdown calls
 > it once; a health-threshold restart calls it again before each restart of that
-> service. (An error-triggered restart does *not* call it — see
-> [Configure restart policy](restart-policy.md).)
+> service. An error-triggered restart does *not* call it; see
+> [Configure restart policy](restart-policy.md).
 
 > **The deadline context is fresh, not the cancelled controller context.** The
 > `ctx` passed to `WithStop` is derived from `context.Background()` with the
-> shutdown timeout — *not* from the already-cancelled controller context. That is
+> shutdown timeout, *not* from the already-cancelled controller context. That is
 > deliberate: a context that was dead on arrival would make `http.Server.Shutdown`
 > fail instantly instead of draining.
 
-## Force-stop of context-ignoring stops
+## Abandoning a stop that ignores its context
 
 Each `WithStop` runs in its own goroutine and is awaited against the deadline. If
 a stop function **ignores its context** and runs long, the controller abandons it
@@ -71,7 +71,7 @@ controls.WithStop(func(ctx context.Context) {
 With a 5s timeout, the controller waits 5s, then abandons this goroutine (it is
 left to finish on its own) and continues shutting down the remaining services.
 This guarantees `Wait()` returns within roughly the shutdown timeout even when a
-stop misbehaves — but the abandoned work is *not* cleanly completed. Always
+stop misbehaves, but the abandoned work is *not* cleanly completed. Always
 honour the context:
 
 ```go
@@ -102,33 +102,34 @@ if err := c.WaitContext(ctx); err != nil {
 }
 ```
 
-On the abandon path the stuck supervisor goroutine is deliberately leaked — the
-same tradeoff as an abandoned stop. See
-[D10 in Concurrency & shutdown correctness](../explanation/concurrency.md).
+On the abandon path the stuck supervisor goroutine is deliberately leaked, the
+same trade as an abandoned stop. See
+[D10 in Concurrency and shutdown correctness](../explanation/concurrency.md).
 
 ## Signal handling
 
 **The controller installs no signal handler by default.** Signal disposition is
-process-global state, so it belongs to whichever layer is outermost — usually
+process-global state, so it belongs to whichever layer is outermost: usually
 your `main`, or the CLI framework wrapping it. A library that registers its own
 handler silently becomes a second owner of that global, and `signal.Notify` is
 additive: every registered channel receives a copy, so two handlers means two
 shutdowns racing.
 
 So the controller observes rather than intercepts. Cancel the context you passed
-to `NewController` and the services shut down gracefully — see
+to `NewController` and the services shut down gracefully; see
 [Stopping from a parent context](#stopping-from-a-parent-context).
 
-> [!important]
-> **Using a CLI framework? Do not opt in.** If something above you already turns
-> signals into context cancellation — go-tool-base's root command does — passing
-> `WithSignals` reintroduces exactly the double-handler race this default exists
-> to prevent. Let the framework own the signal and cancel your context.
+!!! warning "Using a CLI framework? Do not opt in."
+
+    If something above you already turns signals into context cancellation
+    (go-tool-base's root command does), passing `WithSignals` reintroduces
+    exactly the double-handler race this default exists to prevent. Let the
+    framework own the signal and cancel your context.
 
 ### Opting in from a standalone main
 
-When the controller genuinely *is* the outermost layer — a daemon with no CLI
-framework above it — ask for signals explicitly:
+When the controller genuinely *is* the outermost layer, a daemon with no CLI
+framework above it, ask for signals explicitly:
 
 ```go
 c := controls.NewController(ctx, controls.WithSignals())
@@ -138,12 +139,12 @@ The first `SIGINT`/`SIGTERM` initiates a graceful `Stop`. A **second** signal
 exits the signal handler immediately, so a caller can escalate (for example to
 `os.Exit`) if a shutdown is wedged.
 
-> [!caution]
-> A second interrupt overrides your shutdown budget. Where the outermost layer
-> force-exits on the second signal — as go-tool-base's root command does, with
-> `os.Exit(128+signum)` — the process dies immediately, mid-`WithStop` if
-> necessary. Size `WithShutdownTimeout` for the *graceful* path; a user pressing
-> `Ctrl-C` twice is deliberately overruling it.
+!!! warning "A second interrupt overrides your shutdown budget"
+
+    Where the outermost layer force-exits on the second signal, as go-tool-base's
+    root command does with `os.Exit(128+signum)`, the process dies immediately,
+    mid-`WithStop` if necessary. Size `WithShutdownTimeout` for the *graceful*
+    path; a user pressing `Ctrl-C` twice is deliberately overruling it.
 
 ### Tests need no option
 
@@ -172,7 +173,7 @@ cancel()  // -> ordered, bounded shutdown, exactly as Stop() would
 c.Wait()
 ```
 
-The controller does not merely inherit that cancellation — it *reacts* to it,
+The controller does not merely inherit that cancellation. It *reacts* to it,
 running the full shutdown sequence. That is what makes `ErrShutdown` reliable
 below, and it means an expired parent deadline gives your services an orderly
 teardown bounded by `WithShutdownTimeout`, rather than a context that is already
@@ -189,7 +190,7 @@ controls.WithStart(func(ctx context.Context) error {
 	<-ctx.Done()
 
 	if errors.Is(context.Cause(ctx), controls.ErrShutdown) {
-		// Orderly shutdown — an expected end-of-run, not a failure.
+		// Orderly shutdown: an expected end-of-run, not a failure.
 		return ctx.Err()
 	}
 
@@ -197,31 +198,32 @@ controls.WithStart(func(ctx context.Context) error {
 })
 ```
 
-**`ErrShutdown` is now the cause of every stop the controller drives** — a direct
-`Stop()`, a parent cancellation, an expired parent deadline, or a signal when you
-opted into `WithSignals`. One rule, no exceptions.
+**`ErrShutdown` is the cause of every stop the controller drives**: a direct
+`Stop()`, a parent cancellation, an expired parent deadline, or a signal when
+you opted into `WithSignals`. One rule, no exceptions.
 
-> [!note]
-> **This changed in v0.2.0, and it is a deliberate narrowing.** The controller
-> used to derive its context directly from yours, so a parent cancellation left
-> the *parent's* cause on the service's context — meaning you could sometimes
-> tell an upstream cancel from a controlled stop. "Sometimes" is the problem:
-> which cause won was a race between the parent's cancellation and the
-> controller's own, so the distinction was never dependable.
->
-> The controller now owns its cancellation outright and treats your context's
-> completion as a *trigger* for the normal shutdown sequence. You can no longer
-> distinguish *why* the controller stopped you from the cause alone — if a
-> service needs that, watch the parent context yourself. What you gain is that
-> `ErrShutdown` finally means something unconditional.
+!!! note "This changed in v0.2.0, and it is a deliberate narrowing"
+
+    The controller used to derive its context directly from yours, so a parent
+    cancellation left the *parent's* cause on the service's context. That meant
+    you could sometimes tell an upstream cancel from a controlled stop.
+    "Sometimes" is the problem: which cause won was a race between the parent's
+    cancellation and the controller's own, so the distinction was never
+    dependable.
+
+    The controller now owns its cancellation outright and treats your context's
+    completion as a *trigger* for the normal shutdown sequence. You can no longer
+    distinguish *why* the controller stopped you from the cause alone. If a
+    service needs that, watch the parent context yourself. What you gain is that
+    `ErrShutdown` finally means something unconditional.
 
 ## Related
 
-- [Concurrency & shutdown correctness](../explanation/concurrency.md) — what
-  the shutdown bound covers (and D10, the stuck-start abandon policy), why no
-  goroutine leaks or busy-spins.
-- [Architecture](../explanation/architecture.md) — the state machine and control
+- [Concurrency and shutdown correctness](../explanation/concurrency.md): what
+  the shutdown bound covers (and D10, the stuck-start abandon policy), and why
+  no goroutine leaks or busy-spins.
+- [Architecture](../explanation/architecture.md): the state machine and control
   goroutines behind the sequence above.
-- [Controller reference](../reference/controller.md) — `Stop`, `Wait`,
+- [Controller reference](../reference/controller.md): `Stop`, `Wait`,
   `WaitContext` and every option, including what each does when called in the
   wrong state.

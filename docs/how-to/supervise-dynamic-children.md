@@ -30,9 +30,9 @@ controller.Register("workers",
     controls.WithReadiness(sup.Readiness),
 )
 
-// A distinct name: RegisterHealthCheck's contract is that a check name is
-// unique across both services and health checks, and only the health-check map
-// is actually checked, so a collision is accepted and reported twice.
+// A distinct name: RegisterHealthCheck checks a name only against other health
+// checks, so a check sharing a name with the service above would be accepted
+// and the report would carry both entries under one name.
 controller.RegisterHealthCheck(sup.HealthCheck("workers-children"))
 ```
 
@@ -63,13 +63,13 @@ if err := sup.Detach(ctx, "tenant-01JQ"); errors.Is(err, controls.ErrDetachTimeo
 ```
 
 `Detach` waits, bounded by your context. If the budget expires the child is
-forgotten anyway and you are **told** — the alternative is a goroutine still
+forgotten anyway and you are **told**. The alternative is a goroutine still
 running that nothing reports, which is the one shape this API does not offer.
 
 ## The restart policy is the one you already know
 
 `RestartPolicy` is the same type a registered service uses, read through the
-same helpers — including that `MaxRestarts <= 0` is **unlimited**, not none. A
+same helpers, including that `MaxRestarts <= 0` is **unlimited**, not none. A
 child with a `nil` policy runs once and its outcome is final. The value is
 copied at `Attach`, so you may reuse or edit your policy struct afterwards.
 
@@ -93,8 +93,8 @@ and `ChildStatus.Panics` tell a bug from a capacity problem.
 
 ## What `Health` reports
 
-`sup.Health()` returns a `map[string]ChildStatus` — one entry per attached
-child, carrying its `State`, `Restarts`, `Panics` and `LastErr`. It is data, not
+`sup.Health()` returns a `map[string]ChildStatus`, one entry per attached child,
+carrying its `State`, `Restarts`, `Panics` and `LastErr`. It is data, not
 health: what to do about a failed child is your judgement, which is the whole
 point of the boundary below.
 
@@ -120,11 +120,11 @@ This is the difference that matters, and it is deliberate:
 **Registered means required.** A registered service that reports unready takes
 the process out of rotation. A supervised child is not a requirement, so
 `sup.Readiness()` reflects whether the *supervisor* is working and never whether
-its children are — otherwise one dead child would take the process down through
+its children are. Otherwise one dead child would take the process down through
 the registration above.
 
 What you get instead is `HealthCheck` reporting `DEGRADED` while any child has
-failed — visible to an operator, inert to a probe — and a `Failure` handed to
+failed, visible to an operator and inert to a probe, and a `Failure` handed to
 you to judge. If that child really was load-bearing, the consumer that attached
 it can make **itself** unready, which is what registration is for.
 
@@ -188,5 +188,13 @@ rather than by their number: ten children taking 100 ms each stop in about
 100 ms, where one at a time would take a second.
 
 If your units genuinely depend on each other, that ordering is what a
-`Controller` provides deliberately — use one, or sequence them inside a single
+`Controller` provides deliberately. Use one, or sequence them inside a single
 child.
+
+## A supervisor cannot be restarted, so wrap it if its service can be
+
+A `Supervisor` is single use: `Start` after `Stop` returns
+`ErrSupervisorStopped` for ever. A service that owns one and runs under a
+`RestartPolicy` therefore cannot capture it at wiring, or the second run gets a
+supervisor that refuses everything. Build it inside the run, or hand it to a
+[`Generational`](survive-a-restart.md), which builds a fresh one per generation.

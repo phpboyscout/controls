@@ -1,7 +1,7 @@
 # Survive a restart
 
-A service that holds something — a listener, a connection, a supervisor, a
-session — has to hand back a *new* one every time it starts, and refuse access to
+A service that holds something (a listener, a connection, a supervisor, a
+session) has to hand back a *new* one every time it starts, and refuse access to
 the old one once it has stopped. `Generational[R]` does both, so you write what
 to build and what to release and nothing else.
 
@@ -51,6 +51,11 @@ controller.Register("api",
 )
 ```
 
+`WithStopErr` rather than `WithStop`, because `g.Stop` returns an error: a
+`StopErrFunc` reports whether every resource was released, and the controller
+records the answer on `ServiceInfo.StopErr`. A plain `WithStop` cannot say
+either way.
+
 ## Reach the live run
 
 There is deliberately no method handing you the value to keep. Ask for it inside
@@ -63,7 +68,7 @@ err := g.Use(func(r *run) error {
 ```
 
 `Use` holds a lease for the duration, so a stop cannot release the run underneath
-you. With no live generation it returns `ErrNoGeneration` — never a zero value
+you. With no live generation it returns `ErrNoGeneration`: never a zero value
 and never a stale one.
 
 !!! warning "A handle you keep is a handle nobody can protect"
@@ -89,13 +94,16 @@ rather than honest-but-hanging, and it is the deliberate trade.
 
 `Release` is retried until it succeeds, because a resource left live while its
 successor duplicates it is worse than being unavailable. So a `Release` that
-never returns blocks the next `Start` with `ErrPredecessorLive`, loudly.
+never returns blocks the next `Start` with `ErrPredecessorLive`, loudly. A
+`Start` while a generation is already live is refused too, with
+`ErrGenerationRunning`, rather than building a rival alongside it.
 
-That is a bug in the release path rather than something to work around: if you
-see it, something your service holds is not honouring its context.
+`ErrPredecessorLive` is a bug in the release path rather than something to work
+around: if you see it, something your service holds is not honouring its
+context.
 
 ## Related
 
-- [The restart supervisor](../explanation/restart-supervisor.md) — when a restart
-  happens at all
-- [Register services](register-services.md) — the options this composes with
+- [The restart supervisor](../explanation/restart-supervisor.md): when a restart
+  happens at all.
+- [Register services](register-services.md): the options this composes with.
