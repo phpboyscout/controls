@@ -198,3 +198,12 @@ A `Supervisor` is single use: `Start` after `Stop` returns
 `RestartPolicy` therefore cannot capture it at wiring, or the second run gets a
 supervisor that refuses everything. Build it inside the run, or hand it to a
 [`Generational`](survive-a-restart.md), which builds a fresh one per generation.
+
+## Related
+
+- [Registered means required](../explanation/supervision.md): why a failed
+  child never makes the process unready, and the rest of the design.
+- [Supervisor reference](../reference/supervisor.md): every method, option and
+  out-of-order answer.
+- [Survive a restart](survive-a-restart.md): for a service that owns a
+  supervisor and must survive its own restart.
