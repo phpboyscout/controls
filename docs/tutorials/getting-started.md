@@ -180,6 +180,8 @@ shutdown, a `WithStop` is ignoring its context; see
 
 ## Next steps
 
+- Continue the tutorial path with a set of workers that changes while the
+  process runs: [Supervise workers that come and go](supervise-workers.md).
 - Register several services and control their ordering:
   [Register and run services](../how-to/register-services.md).
 - Report health to an HTTP or gRPC endpoint:
