@@ -5,12 +5,12 @@ will register one background worker, start it under a `Controller`, and watch it
 shut down cleanly when you press Ctrl-C.
 
 You will do everything in one self-contained Go program so you can see each
-moving part. By the end you will understand what `Register`, `Start`, and — most
-importantly — `Wait` actually guarantee.
+moving part. By the end you will know what `Register`, `Start` and, most
+importantly, `Wait` actually guarantee.
 
 ## Prerequisites
 
-- Go 1.26 or newer.
+- Go 1.27 or newer, which is what `go.mod` declares.
 - A new module to experiment in:
 
 ```sh
@@ -19,12 +19,14 @@ go mod init example.test/controls-tutorial
 go get gitlab.com/phpboyscout/go/controls
 ```
 
-## Step 1 — Create a controller
+## Step 1: create a controller
 
 A `Controller` is constructed from a parent `context.Context` and zero or more
-options. The context is the root of every service's lifetime: when it is
-cancelled — by a signal, by `Stop`, or by the parent — every service's `ctx`
-unblocks.
+options. The controller derives its own context from the one you pass, and that
+derived context is what every service receives. Cancel yours, or let its
+deadline expire, and the controller runs a graceful shutdown, so every service's
+`ctx` unblocks with the same cause whether a signal, a `Stop` call or your
+context triggered it.
 
 ```go
 ctx := context.Background()
@@ -35,23 +37,23 @@ c := controls.NewController(ctx, controls.WithSignals())
 what we want here: this program is a standalone daemon, so the controller is the
 outermost layer and Ctrl-C should trigger a graceful shutdown.
 
-It is opt-in because signal disposition is process-global. If you are building on
-a CLI framework that already turns signals into context cancellation — go-tool-base
-does — leave it off and let the framework cancel the context you pass in; the
+It is opt-in because signal disposition is process-global. If you are building
+on a CLI framework that already turns signals into context cancellation (go-tool-base
+does), leave it off and let the framework cancel the context you pass in. The
 controller shuts down just the same. See
-[Handle graceful shutdown & signals](../how-to/graceful-shutdown.md).
+[Handle graceful shutdown and signals](../how-to/graceful-shutdown.md).
 
 With no other options the controller logs to a discard handler.
 
-## Step 2 — Register a service
+## Step 2: register a service
 
 A *service* is a name plus a set of lifecycle callbacks supplied as functional
 options. The two that matter most are:
 
-- **`WithStart`** — a `func(ctx context.Context) error`. It receives a context
+- **`WithStart`**, a `func(ctx context.Context) error`. It receives a context
   that is cancelled when the controller shuts down.
-- **`WithStop`** — a `func(ctx context.Context)`. It runs during shutdown, with
-  a context bounded by the shutdown timeout.
+- **`WithStop`**, a `func(ctx context.Context)`. It runs during shutdown, with a
+  context bounded by the shutdown timeout.
 
 Here is a worker that ticks once a second until its context is cancelled:
 
@@ -78,12 +80,12 @@ c.Register("ticker",
 )
 ```
 
-> **Register before Start.** Registration must happen before `Start`. Once
-> `Start` runs, the controller has snapshotted its service set and launched the
-> supervisor goroutines, so a later `Register` is never started or stopped — it
-> only logs a warning. Treat that warning as a bug to fix.
+> **Register before Start.** Once `Start` runs, the controller has snapshotted
+> its service set and launched the supervisor goroutines, so a later `Register`
+> is never started or stopped. It only logs a warning. Treat that warning as a
+> bug to fix.
 
-## Step 3 — Start, then wait
+## Step 3: start, then wait
 
 ```go
 c.Start() // launches every registered service, returns immediately
@@ -93,7 +95,7 @@ c.Wait()  // blocks until the whole shutdown sequence has finished
 `Start` is non-blocking: it launches a supervisor goroutine per service and the
 control goroutines, then returns. `Wait` is where your `main` parks.
 
-## Step 4 — Shut down with Ctrl-C
+## Step 4: shut down with Ctrl-C
 
 Because we passed `WithSignals`, the controller is listening for `SIGINT` and
 `SIGTERM`. Pressing Ctrl-C:
@@ -155,16 +157,16 @@ go run .
 
 ## What `Wait()` guarantees
 
-`Wait` does not simply block until your `Start` functions return — it blocks
+`Wait` does not simply block until your `Start` functions return. It blocks
 until the **entire shutdown sequence** has finished. Internally the controller
-adds one wait-group count per service *plus one for its own lifecycle*, and that
-extra count is only released after it has:
+adds one wait-group count per service, one per async health check, and one for
+its own lifecycle, and that last count is only released after it has:
 
 1. cancelled the controller context,
 2. run every `WithStop` (or abandoned a stuck one at the deadline),
 3. transitioned to the `Stopped` state.
 
-So when `Wait` returns, you know shutdown is genuinely complete — every stop
+So when `Wait` returns, you know shutdown is genuinely complete: every stop
 callback has been given its chance to run and no supervised goroutine is still
 draining. That makes `c.Wait()` the correct and only thing your `main` needs to
 block on.
@@ -173,13 +175,13 @@ block on.
 
 The program prints a `tick` line every second. On Ctrl-C it prints
 `ticker stopping`, then `shutdown complete`, and exits promptly. If it hangs on
-shutdown, a `WithStop` is ignoring its context — see
-[Handle graceful shutdown & signals](../how-to/graceful-shutdown.md).
+shutdown, a `WithStop` is ignoring its context; see
+[Handle graceful shutdown and signals](../how-to/graceful-shutdown.md).
 
 ## Next steps
 
 - Register several services and control their ordering:
-  [Register & run services](../how-to/register-services.md).
+  [Register and run services](../how-to/register-services.md).
 - Report health to an HTTP or gRPC endpoint:
   [Add health checks](../how-to/health-checks.md).
 - Make a service self-healing: [Configure restart policy](../how-to/restart-policy.md).
