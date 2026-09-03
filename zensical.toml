@@ -11,7 +11,7 @@ nav = [
 
 [project]
 site_name = "controls"
-site_description = "Service-lifecycle supervisor for Go — startup ordering, health probes, graceful shutdown, self-healing restarts"
+site_description = "Service-lifecycle supervisor for Go: concurrent startup, health probes, ordered shutdown, self-healing restarts"
 site_author = "Matt Cockayne"
 site_url = "https://controls.go.phpboyscout.uk"
 repo_url = "https://gitlab.com/phpboyscout/go/controls"

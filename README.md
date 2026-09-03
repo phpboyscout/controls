@@ -2,43 +2,45 @@
 
 # controls
 
-**Service-lifecycle supervisor for Go — concurrent startup, health probes, ordered (reverse-registration) shutdown, self-healing restarts**
+**Service-lifecycle supervisor for Go: concurrent startup, health probes, ordered (reverse-registration) shutdown, self-healing restarts**
 
 [![Go Reference](https://pkg.go.dev/badge/gitlab.com/phpboyscout/go/controls.svg)](https://pkg.go.dev/gitlab.com/phpboyscout/go/controls)
 [![Pipeline](https://gitlab.com/phpboyscout/go/controls/badges/main/pipeline.svg)](https://gitlab.com/phpboyscout/go/controls/-/pipelines)
 [![Coverage](https://gitlab.com/phpboyscout/go/controls/badges/main/coverage.svg)](https://gitlab.com/phpboyscout/go/controls/-/graphs/main/charts)
 [![phpboyscout Go toolkit](https://img.shields.io/badge/phpboyscout-Go%20toolkit-554488?logo=gitlab&logoColor=white)](https://go.phpboyscout.uk)
 
-<em>Part of the <a href="https://go.phpboyscout.uk">phpboyscout Go toolkit</a> &mdash; small, framework-free Go modules extracted from <a href="https://gitlab.com/phpboyscout/go-tool-base">go-tool-base</a>. Docs: <a href="https://controls.go.phpboyscout.uk">controls.go.phpboyscout.uk</a></em>
+<em>Part of the <a href="https://go.phpboyscout.uk">phpboyscout Go toolkit</a>: small, framework-free Go modules extracted from <a href="https://gitlab.com/phpboyscout/go-tool-base">go-tool-base</a>. Docs: <a href="https://controls.go.phpboyscout.uk">controls.go.phpboyscout.uk</a></em>
 
 </div>
 
 ---
 
-`gitlab.com/phpboyscout/go/controls` — a small **service-lifecycle supervisor**
-for long-running Go processes. Register your services (HTTP/gRPC servers,
-background workers, schedulers), and the `Controller` starts them concurrently,
-monitors their health (liveness/readiness), optionally takes ownership of
+`gitlab.com/phpboyscout/go/controls` is a small **service-lifecycle supervisor**
+for long-running Go processes. Register your services (HTTP and gRPC servers,
+background workers, schedulers) and the `Controller` starts them concurrently,
+aggregates the health probes they supply, optionally takes ownership of
 `SIGINT`/`SIGTERM`, and drives a bounded graceful shutdown in reverse
-registration order — with an
-optional self-healing restart policy. The shutdown bound covers stop callbacks
-*and* supervisor exit: a context-ignoring stop — or a start that never returns —
-is abandoned (and named in a WARN) at the deadline rather than wedging shutdown.
+registration order, with an optional self-healing restart policy. The shutdown
+bound covers stop callbacks *and* supervisor exit: a stop that ignores its
+context, or a start that never returns, is abandoned at the deadline and named
+in a `WARN` rather than left to wedge shutdown.
 
 It is the same supervisor behind go-tool-base's service commands, extracted so
 any project can adopt it **without** pulling in the framework.
 
 ## Design
 
-- **Framework-free.** The only external dependency is `cockroachdb/errors`; the
-  only logging seam is a nil-safe `*slog.Logger`. No config framework, no TUI, no
-  OpenTelemetry, no go-tool-base. A `depfootprint_test.go` guard enforces it.
-- **Stdlib seams.** Bring a `*slog.Logger` (or none — it defaults to a discard
-  handler). Everything else is functional options.
-- **Correct concurrency.** Idempotent `Start`/`Stop`, a restart policy that
-  distinguishes clean-exit / cancellation / failure and never floods the error
-  channel, force-stop on shutdown timeout, and readiness that fails closed until
-  the first async health check completes. Race-clean under `-race`.
+- **Framework-free.** The only external dependency is
+  [`go/errors`](https://gitlab.com/phpboyscout/go/errors), a sibling toolkit
+  module. No config framework, no TUI, no OpenTelemetry, no go-tool-base, and
+  `depfootprint_test.go` fails the build if any of them reaches the module graph.
+- **Stdlib seams.** The only logging seam is a `*slog.Logger`; omit it and the
+  controller logs to a discard handler. Everything else is functional options.
+- **Correct concurrency.** Idempotent `Start`/`Stop`; a restart policy that
+  distinguishes a clean start from a cancellation from a failure and never floods
+  the error channel; a stop callback that overruns the shutdown deadline is
+  abandoned rather than waited for; readiness fails closed until the first async
+  health check has run. Race-clean under `-race`.
 
 ## Install
 
@@ -76,26 +78,36 @@ func main() {
 }
 ```
 
-No OS signal handler is installed unless you pass `controls.WithSignals()` —
-signal disposition is process-global, so it belongs to the outermost layer.
+No OS signal handler is installed unless you pass `controls.WithSignals()`.
+Signal disposition is process-global, so it belongs to the outermost layer, and
+under a CLI framework that already turns signals into context cancellation that
+layer is not the controller.
 
 ## Key concepts
 
-- **`Controller`** — the supervisor. `Register` services before `Start`; `Wait`
+- **`Controller`** is the supervisor. `Register` services before `Start`; `Wait`
   blocks until the full shutdown sequence completes and every supervisor
-  goroutine has unwound (it requires context-respecting start callbacks —
-  `WaitContext` is the deadline-bounded variant for services that may wrap
-  cancellation-ignoring third-party code).
-- **Health probes** — attach `WithStatus` / `WithLiveness` / `WithReadiness` to a
-  service, or register standalone `HealthCheck`s (sync or async with an
-  `Interval`). `Status()` / `Liveness()` / `Readiness()` return aggregate
-  `HealthReport`s for wiring into transport health endpoints.
-- **Restart policy** — `WithRestartPolicy` enables self-healing with exponential
-  backoff, a `MaxRestarts` cap, a health-failure threshold, and a consecutive-
-  failure counter that resets after a healthy window.
-- **Options** — `WithLogger`, `WithShutdownTimeout`, `WithSignals` (standalone mains),
-  `WithValidError` (exempt expected terminal errors like `http.ErrServerClosed`
-  from the restart count).
+  goroutine has unwound. `Wait` requires start callbacks that return when their
+  context is cancelled; `WaitContext` is the deadline-bounded variant for a
+  service that wraps third-party code which may not.
+- **Health probes.** Attach `WithStatus`, `WithLiveness` or `WithReadiness` to a
+  service, or register standalone `HealthCheck`s (sync, or async with an
+  `Interval`). `Status()`, `Liveness()` and `Readiness()` return aggregate
+  `HealthReport` values for wiring into whatever transport your process speaks.
+  The module opens no port of its own.
+- **Restart policy.** `WithRestartPolicy` enables self-healing with exponential
+  backoff, a `MaxRestarts` cap on consecutive failures, a health-failure
+  threshold, and a counter that resets after a healthy window.
+- **`Supervisor`** manages a set of children that attach and detach while the
+  process runs, under the same `RestartPolicy` rules. A `Controller` manages a
+  fixed set with ordered shutdown; a `Supervisor` manages a changing one with
+  concurrent shutdown, and a process usually wants both.
+- **`Generational`** owns one generation of a resource at a time, for a service
+  that holds something single-use (a listener, a server, a supervisor) and has
+  to survive a restart.
+- **Options.** `WithLogger`, `WithShutdownTimeout`, `WithSignals` for a
+  standalone main, and `WithValidError` to exempt an expected terminal error such
+  as `http.ErrServerClosed` from the restart count.
 
 ## Documentation
 
