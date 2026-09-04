@@ -1,0 +1,22 @@
+# Semgrep replaces its built-in ignore list with this file when it exists, so
+# the defaults are repeated here rather than lost.
+node_modules/
+build/
+dist/
+vendor/
+.env/
+.venv/
+.tox/
+*.min.js
+.npm/
+.yarn/
+test/
+tests/
+*_test.go
+.semgrep
+.semgrep_logs/
+
+# Fixtures for the singleuse analyzer under lint/ are inputs the analyzer is
+# tested against, not code that runs. They deliberately build servers the
+# wrong way, which is what the analyzer exists to catch.
+lint/testdata/
