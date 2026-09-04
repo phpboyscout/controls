@@ -1,0 +1,9 @@
+# Release manifest read by colophon (v0.4.0 or later). Reference:
+# https://colophon.phpboyscout.uk/reference/release-manifest/
+#
+# lint/ is a nested Go module (spec 0005 D1). Go resolves it only at a tag
+# carrying the directory prefix, so every root release vX.Y.Z is also tagged
+# lint/vX.Y.Z at the same commit (D8, D10). colophon reads nothing inside the
+# directory; it only cuts the tag.
+tag_also:
+  - lint

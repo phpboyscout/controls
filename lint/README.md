@@ -9,6 +9,9 @@ previous run's by the second call. This pass names the line where that happens.
 go run gitlab.com/phpboyscout/go/controls/lint/cmd/singleuse@latest ./...
 ```
 
+It is tagged with every `controls` release, as `lint/vX.Y.Z` at the same
+commit, so `@v0.6.0` is the analyzer released with `controls` v0.6.0.
+
 It is a nested module of `go/controls` with its own `go.mod`, so `x/tools`
 never enters the root module's dependency graph. The rule it enforces is on
 [`StartFunc`'s doc comment](https://pkg.go.dev/gitlab.com/phpboyscout/go/controls#StartFunc)

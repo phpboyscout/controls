@@ -16,9 +16,10 @@ happens. It ships as a nested module of this repository and runs like `go vet`.
 go run gitlab.com/phpboyscout/go/controls/lint/cmd/singleuse@latest ./...
 ```
 
-`@latest` resolves to the tip of `main` until the module carries a
-`lint/vX.Y.Z` tag, which it will from the first release cut after colophon
-learns to tag nested modules. Pin a version once one exists.
+Every release of `controls` from the first one cut with colophon v0.4.0 or
+later is also tagged `lint/vX.Y.Z`, so pin the same version you pin for
+`controls` itself: `@v0.6.0` runs the analyzer released with v0.6.0. `@latest`
+resolves to the newest such tag, or to the tip of `main` while none exists.
 
 The command exits 3 on a finding, as `go vet` exits non-zero, and 1 when it
 could not load the packages at all. It is **advisory** by design: the `cicd`

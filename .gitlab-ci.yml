@@ -3,7 +3,8 @@
 #   merge_request_event → lint, test, security   (the merge gate), plus the
 #                         two lint-module jobs below when lint/ changed
 #   default branch      → colophon, zensical-pages deploy
-#   tag v*.*.*          → zensical-pages docs for the release
+#   tag v*.*.*          → zensical-pages docs for the release (lint/v* tags
+#                         mark the same commit and start nothing)
 #   schedule            → renovate
 #
 # This is a library (no binaries), so there is no goreleaser component and no
@@ -36,7 +37,9 @@ workflow:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
       when: never
-    - if: '$CI_COMMIT_TAG'
+    # Root tags only. lint/vX.Y.Z is cut beside every root tag (.colophon.yaml)
+    # and marks the same commit, so a second docs deploy for it would be waste.
+    - if: '$CI_COMMIT_TAG =~ /^v/'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
