@@ -109,6 +109,16 @@ layer is not the controller.
   standalone main, and `WithValidError` to exempt an expected terminal error such
   as `http.ErrServerClosed` from the restart count.
 
+## The lint
+
+`lint/` is a nested module holding `singleuse`, an advisory analyzer that names
+the line where a `StartFunc` captures a server, listener or supervisor a
+restart cannot reuse. It keeps `x/tools` out of this module's graph.
+
+```bash
+go run gitlab.com/phpboyscout/go/controls/lint/cmd/singleuse@latest ./...
+```
+
 ## Documentation
 
 Full guides and design notes: **[controls.go.phpboyscout.uk](https://controls.go.phpboyscout.uk)**.

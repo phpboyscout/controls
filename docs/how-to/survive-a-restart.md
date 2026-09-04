@@ -109,3 +109,5 @@ context.
 - [The restart supervisor](../explanation/restart-supervisor.md): when a restart
   happens at all.
 - [Register services](register-services.md): the options this composes with.
+- [Find a capture a restart cannot reuse](lint-single-use-captures.md): the
+  analyzer that names the line this type exists to fix.
