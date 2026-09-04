@@ -9,9 +9,12 @@ import (
 // TestDependencyFootprint is the enforceable statement of "framework-free": the
 // module's transitive dependency graph must not pull in go-tool-base, the CLI/
 // config/TUI stack, OpenTelemetry, or any cloud SDK. controls is a pure lifecycle
-// supervisor whose only external dependency is cockroachdb/errors; a regression
-// that reintroduces framework coupling fails here rather than silently bloating
-// every downstream binary.
+// supervisor whose only external dependency is gitlab.com/phpboyscout/go/errors;
+// a regression that reintroduces framework coupling fails here rather than
+// silently bloating every downstream binary.
+//
+// go list -deps ./... does not descend into lint/, which holds its own go.mod,
+// so the analyzer's x/tools dependency never appears here (spec 0005 D1).
 func TestDependencyFootprint(t *testing.T) {
 	t.Parallel()
 

@@ -1,6 +1,7 @@
 # .gitlab-ci.yml — pipeline assembled from phpboyscout/cicd components.
 #
-#   merge_request_event → lint, test, security   (the merge gate)
+#   merge_request_event → lint, test, security   (the merge gate), plus the
+#                         two lint-module jobs below when lint/ changed
 #   default branch      → colophon, zensical-pages deploy
 #   tag v*.*.*          → zensical-pages docs for the release
 #   schedule            → renovate
@@ -41,3 +42,43 @@ workflow:
 
 variables:
   GIT_DEPTH: "0"
+
+# lint/ is a nested module (spec 0005 D1) and the go-lint and go-test
+# components run at the root only, so it has its own two jobs (D7). They mirror
+# the components' image, cache and gating; the components gain a working
+# directory input later and these go away then.
+.lint-module:
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.1.1
+  interruptible: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "lint/**/*"
+        - ".golangci.*"
+        - ".gitlab-ci.yml"
+  variables:
+    GOPATH: "$CI_PROJECT_DIR/.go"
+    GOCACHE: "$CI_PROJECT_DIR/.go/cache"
+  cache:
+    key: "${CI_PROJECT_PATH_SLUG}-go"
+    paths:
+      - .go/pkg/mod/
+      - .go/cache/
+    policy: pull-push
+  before_script:
+    - mkdir -p "$GOPATH/pkg/mod" "$GOCACHE"
+    - cd lint
+
+golangci-lint (lint module):
+  extends: .lint-module
+  stage: lint
+  script:
+    - golangci-lint run --config ../.golangci.yaml --timeout=30m ./...
+
+unit-test (lint module):
+  extends: .lint-module
+  stage: test
+  script:
+    - go test -race -cover ./...
