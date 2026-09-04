@@ -40,10 +40,16 @@ type Controller struct {
 	// parent is the caller's context, retained only so the error/context handler
 	// can watch it. Its completion — by cancellation OR deadline — is a TRIGGER
 	// for a graceful Stop, not the cancellation itself.
-	parent          context.Context
-	logger          *slog.Logger
-	messages        chan Message
-	errs            chan error
+	parent   context.Context
+	logger   *slog.Logger
+	messages chan Message
+	errs     chan error
+	// ownErrs is the error channel NewController made. The error handler
+	// reads and logs from it because nothing else will; a channel a consumer
+	// installed with SetErrorsChannel is the consumer's to drain, and the
+	// handler must not compete for it, or the consumer sees only a share of
+	// what was forwarded (issue 14).
+	ownErrs         chan error
 	signals         chan os.Signal
 	wg              *sync.WaitGroup
 	shutdownTimeout time.Duration
@@ -402,9 +408,13 @@ func (c *Controller) startErrorAndContextHandler() {
 		// busy-spin fix, D4).
 		done := c.parent.Done()
 
+		// Only the controller's own channel is read here. A replaced one has
+		// a consumer, and reading it too would take errors from them.
+		errs := c.loggedErrors()
+
 		for {
 			select {
-			case err, ok := <-c.Errors():
+			case err, ok := <-errs:
 				if !ok {
 					return // channel closed, controller stopped
 				}
@@ -434,12 +444,25 @@ func (c *Controller) startErrorAndContextHandler() {
 	}()
 }
 
-// drainErrors empties the error channel without blocking, logging any non-cancel
-// errors. Used at handler shutdown so a buffered error is not silently dropped.
+// loggedErrors is the channel the controller logs from: its own, or nil (a
+// select case that never fires) once a consumer has replaced it.
+func (c *Controller) loggedErrors() chan error {
+	if c.errs != c.ownErrs {
+		return nil
+	}
+
+	return c.errs
+}
+
+// drainErrors empties the controller's own error channel without blocking,
+// logging any non-cancel errors. Used at handler shutdown so a buffered error
+// is not silently dropped. A replaced channel is left to its consumer.
 func (c *Controller) drainErrors() {
+	errs := c.loggedErrors()
+
 	for {
 		select {
-		case err, ok := <-c.Errors():
+		case err, ok := <-errs:
 			if !ok {
 				return
 			}
@@ -771,13 +794,16 @@ func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 	parent := ctx
 	ctx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 
+	errs := make(chan error)
+
 	c := &Controller{
 		ctx:      ctx,
 		cancel:   cancel,
 		parent:   parent,
 		logger:   slog.New(slog.DiscardHandler),
 		messages: make(chan Message),
-		errs:     make(chan error),
+		errs:     errs,
+		ownErrs:  errs,
 		// nil by default: signal disposition is process-global and belongs to the
 		// outermost layer. Opt in with WithSignals (D1/D2).
 		signals:          nil,

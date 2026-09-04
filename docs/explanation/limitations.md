@@ -35,10 +35,10 @@ every other service carries on. The controller stops only on `Stop()`, on a
 signal it owns via `WithSignals`, or when the parent context completes.
 
 If a failed service should take the process with it, watch for it yourself
-(consume the error channel with `SetErrorsChannel` before `Start`, or poll
-`GetServiceInfo`) and call `Stop()`. The moment a service gives up is
-recognisable: its error satisfies `errors.Is` against `ErrRestartsExhausted`,
-on the channel and on `ServiceInfo.Error`.
+(consume the error channel with `SetErrorsChannel` before `Start`, which makes
+you its only receiver, or poll `GetServiceInfo`) and call `Stop()`. The moment
+a service gives up is recognisable: its error satisfies `errors.Is` against
+`ErrRestartsExhausted`, on the channel and on `ServiceInfo.Error`.
 
 ## A health report is not proof a service is running
 
