@@ -21,8 +21,10 @@ later is also tagged `lint/vX.Y.Z`, so pin the same version you pin for
 `controls` itself: `@v0.6.0` runs the analyzer released with v0.6.0. `@latest`
 resolves to the newest such tag, or to the tip of `main` while none exists.
 
-The command exits 3 on a finding, as `go vet` exits non-zero, and 1 when it
-could not load the packages at all. It is **advisory** by design: the `cicd`
+The analyzer exits 3 on a finding, as `go vet` exits non-zero, and 1 when it
+could not load the packages at all. `go run` hides that: it reports a
+non-zero child as `exit status 3` and exits 1 itself, so anything that keys on
+the exit code should `go install` the command and run the binary. It is **advisory** by design: the `cicd`
 component that runs it in the estate, `go-singleuse`, tolerates exit code 3
 alone, so a finding shows as a warning and a broken run still fails. A job
 you write yourself needs the same `allow_failure: exit_codes: [3]`. Advisory
