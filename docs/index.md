@@ -126,6 +126,7 @@ The documentation follows the [Diátaxis](https://diataxis.fr/) framework:
     - [Handle graceful shutdown and signals](how-to/graceful-shutdown.md)
     - [Supervise children that come and go](how-to/supervise-dynamic-children.md)
     - [Survive a restart](how-to/survive-a-restart.md)
+    - [Find a capture a restart cannot reuse](how-to/lint-single-use-captures.md)
     - [Test services and mock the controller](how-to/testing.md)
 - **Explanation** is understanding-oriented background:
     - [Architecture and the lifecycle state machine](explanation/architecture.md)

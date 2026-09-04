@@ -154,6 +154,11 @@ stopped generation must **refuse further use, loudly**.
 genuinely captures nothing single-use needs neither, and most services do not.
 This is a rule about the ones that hold something.
 
+The rule also has a lint. `singleuse`, a nested module of this repository,
+names the line where a `StartFunc` reaches a server, listener or supervisor it
+did not build; see
+[Find a capture a restart cannot reuse](../how-to/lint-single-use-captures.md).
+
 ## Related
 
 - [Configure restart policy](../how-to/restart-policy.md): the practical recipe.
