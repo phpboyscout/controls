@@ -104,7 +104,10 @@ each error at `ERROR` level (except `context.Canceled`, which it drops) and
 exits when shutdown completes. Every internal send is guarded against that exit,
 so a late error is dropped rather than blocking a supervisor. If you replace the
 channel with `SetErrorsChannel` before `Start` to consume errors yourself, you
-become that receiver and must keep draining it.
+become that receiver, the only one: the controller's handler reads and logs
+nothing from a replaced channel, so every forwarded error is yours and so is
+the logging. Keep draining it; an unread error blocks the supervisor that sent
+it until shutdown completes.
 
 ## Setters, and when they are safe to call
 

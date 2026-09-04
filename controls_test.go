@@ -129,10 +129,11 @@ func TestController_SetState(t *testing.T) {
 	assert.True(t, c.IsStopped())
 }
 
+// The controller logs what arrives on its own error channel. A replaced
+// channel is the consumer's and is not read here; see
+// TestAReplacedErrorChannelHasOneReceiver.
 func TestController_Errors(t *testing.T) {
 	c, _, output := getNewController(context.Background())
-	errs := make(chan error)
-	c.SetErrorsChannel(errs)
 
 	c.Start()
 	c.Errors() <- fmt.Errorf("test error") //nolint:goerr113
