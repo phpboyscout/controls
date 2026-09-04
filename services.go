@@ -19,6 +19,16 @@ const (
 	DefaultRestartResetInterval = 30 * time.Second
 )
 
+// ErrRestartsExhausted is in the error a service or a child leaves behind when
+// it has used up its restart policy: on ServiceInfo.Error and Errors() for a
+// service, on Failure.Err for a child. Test for it with errors.Is; the
+// service's last error is reachable the same way beside it.
+//
+// Nothing is stopped on its account (spec 0006 D4). A consumer that wants the
+// process to end when a service will not come back tests for this on Errors()
+// and calls Stop.
+var ErrRestartsExhausted = errors.NewSentinel("controls.restarts_exhausted", "max restarts exceeded")
+
 // runOutcome classifies the result of a single service run for the supervisor.
 type runOutcome int
 
@@ -295,10 +305,7 @@ func (q *Services) runOnce(ctx context.Context, srv Service, errs chan error, up
 func (q *Services) reportExhausted(srv Service, err error, cleanStart bool,
 	updateInfo func(func(*ServiceInfo)), errs chan error, done <-chan struct{},
 ) {
-	finalErr := errors.New("max restarts exceeded")
-	if err != nil {
-		finalErr = errors.Wrap(err, "max restarts exceeded")
-	}
+	finalErr := exhaustedWith(ErrRestartsExhausted.Error(), err)
 
 	updateInfo(func(i *ServiceInfo) { i.Error = finalErr })
 
@@ -307,6 +314,28 @@ func (q *Services) reportExhausted(srv Service, err error, cleanStart bool,
 	}
 
 	sendErr(done, errs, finalErr)
+}
+
+// exhausted is the terminal error of a unit that used up its restart policy.
+// It unwraps to ErrRestartsExhausted and to the cause, so errors.Is matches
+// either, and it prints exactly what errors.Wrap printed before it existed, so
+// nothing matching the message notices (spec 0006 D2).
+type exhausted struct {
+	msg   string
+	cause error
+}
+
+func (e *exhausted) Error() string   { return e.msg + ": " + e.cause.Error() }
+func (e *exhausted) Unwrap() []error { return []error{ErrRestartsExhausted, e.cause} }
+
+// exhaustedWith builds the terminal error for a cause, or is the sentinel
+// alone when there is none, which is what a health-driven exhaustion has.
+func exhaustedWith(msg string, cause error) error {
+	if cause == nil {
+		return ErrRestartsExhausted
+	}
+
+	return &exhausted{msg: msg, cause: cause}
 }
 
 func calculateNextBackoff(current, max time.Duration) time.Duration {

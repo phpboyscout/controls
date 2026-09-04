@@ -97,8 +97,9 @@ wait the full `MaxBackoff` before its next restart, as if the old failures never
 aged out.
 
 When the counter does reach `MaxRestarts`, the supervisor gives up: it records a
-`max restarts exceeded` error (wrapping the last real error) and stops
-supervising that service.
+`max restarts exceeded` error that `errors.Is` matches against
+`ErrRestartsExhausted` and against the last real error, and stops supervising
+that service. A `Supervisor`'s child leaves the same sentinel on its `Failure`.
 
 ## The error channel contract
 

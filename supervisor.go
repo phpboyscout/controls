@@ -129,7 +129,8 @@ type Failure struct {
 	// Name is the child that failed.
 	Name string
 
-	// Err is the error it last returned, wrapped to say restarts were exhausted.
+	// Err is the error it last returned, wrapped to say restarts were exhausted:
+	// errors.Is matches [ErrRestartsExhausted] and the child's own error.
 	Err error
 
 	// Restarts is how many were attempted before giving up.

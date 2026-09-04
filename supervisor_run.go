@@ -2,6 +2,7 @@ package controls
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -575,7 +576,7 @@ func (s *Supervisor) fail(c *supervisedChild, restarts int, err error, panicked 
 
 	f := Failure{
 		Name:     c.spec.Name,
-		Err:      errors.Wrapf(err, "controls: child %q exhausted its restart policy", c.spec.Name),
+		Err:      exhaustedWith(fmt.Sprintf("controls: child %q exhausted its restart policy", c.spec.Name), err),
 		Restarts: restarts,
 		Panicked: panicked,
 	}

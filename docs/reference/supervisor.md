@@ -192,3 +192,4 @@ at shutdown: select on it alongside your own done channel.
 | `ErrChildAttached` | `Attach` | the name is already in use |
 | `ErrChildNotAttached` | `Detach` | no child under that name |
 | `ErrDetachTimeout` | `Detach` | the child outlived the budget. It is forgotten either way |
+| `ErrRestartsExhausted` | inside `Failure.Err`, by `errors.Is` | the child used up its restart policy; the child's own last error matches beside it |

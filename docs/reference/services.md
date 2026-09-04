@@ -142,17 +142,28 @@ child has no `Status` probe. See the [Supervisor reference](supervisor.md#child)
 ## What the supervisor does when restarts run out
 
 When the consecutive-failure counter reaches `MaxRestarts`, the supervisor stops
-supervising that service and records an error:
+supervising that service and records an error that `errors.Is` matches against
+`ErrRestartsExhausted`:
 
-- from an error-driven restart loop, `max restarts exceeded: <last start error>`
-  (the last error is wrapped, so `errors.Is` against it still matches);
-- from a health-driven restart loop, `max restarts exceeded` on its own, because
-  the health failure was recorded on `ServiceInfo.Error` rather than returned.
+- from an error-driven restart loop, `max restarts exceeded: <last start error>`,
+  and `errors.Is` against the last error still matches too, since the error
+  unwraps to both;
+- from a health-driven restart loop, `ErrRestartsExhausted` itself, whose
+  message is `max restarts exceeded`, because the health failure was recorded
+  on `ServiceInfo.Error` rather than returned.
 
 That error is stored on `ServiceInfo.Error` and forwarded on the error channel.
-There is no sentinel for it yet, so a consumer that wants to recognise the
-moment matches the message; a typed error is tracked in
-[#11](https://gitlab.com/phpboyscout/go/controls/-/issues/11).
+A consumer that wants the process to end when a service will not come back
+tests for the sentinel on the channel and calls `Stop()`:
+
+```go
+for err := range errs {
+	if errors.Is(err, controls.ErrRestartsExhausted) {
+		c.Stop()
+	}
+}
+```
+
 **The controller keeps running.** A service exhausting its restarts, or failing
 with no policy at all, never shuts the process down; the controller stops only
 on `Stop()`, a signal it owns, or completion of the parent context.
@@ -187,7 +198,7 @@ type ServiceInfo struct {
 | `RestartCount` | **Consecutive** failures so far, not lifetime restarts. Reset to zero when a run lasts at least `RestartResetInterval`. |
 | `LastStarted` | When the most recent run began. |
 | `LastStopped` | When the most recent run returned. Set on every return, including a clean start that is still serving in the background, so it is not evidence the service has stopped. |
-| `Error` | The most recent classified error, or the `max restarts exceeded` wrapper once the supervisor gave up. `nil` after a clean run. |
+| `Error` | The most recent classified error, or once the supervisor gave up the `max restarts exceeded` error, which `errors.Is` matches against `ErrRestartsExhausted` and against the last error. `nil` after a clean run. |
 | `StopErr` | How the last stop ended: `nil` when every resource was released, non-nil when it was not (including a recovered panic), and always `nil` for a service registered with `WithStop`, which cannot report either way. |
 
 ## Ordering guarantees

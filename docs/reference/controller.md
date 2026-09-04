@@ -136,6 +136,7 @@ registration receiving signals nobody reads.
 | Symbol | Value | Meaning |
 |---|---|---|
 | `ErrShutdown` | `errors.NewSentinel("controls.shutdown", "controller shutdown")` | The cause attached to the controller context for every stop the controller drives. Test for it with `errors.Is(context.Cause(ctx), controls.ErrShutdown)`. |
+| `ErrRestartsExhausted` | `errors.NewSentinel("controls.restarts_exhausted", "max restarts exceeded")` | Inside the error a service leaves on `ServiceInfo.Error` and `Errors()`, and a child on `Failure.Err`, when it has used up its restart policy. `errors.Is` matches it and the last error beside it. |
 | `DefaultShutdownTimeout` | `5 * time.Second` | Applied when `WithShutdownTimeout` is not passed. |
 | `DefaultRestartResetInterval` | `30 * time.Second` | Applied when `RestartPolicy.RestartResetInterval` is zero. |
 | `Stop` | `Message("stop")` | The only control message. |

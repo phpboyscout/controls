@@ -40,12 +40,14 @@ type RestartPolicy struct {
 - **`MaxRestarts`.** Caps **consecutive** failures (see below), not lifetime
   restarts. It counts *restarts*, so `MaxRestarts: 5` lets the service run six
   times in all. When exceeded, the supervisor gives up on the service and
-  forwards a `max restarts exceeded` error, wrapping the last `StartFunc` error
-  when there was one. `0` means unlimited.
+  forwards a `max restarts exceeded` error that `errors.Is` matches against
+  `ErrRestartsExhausted`, and against the last `StartFunc` error when there was
+  one. `0` means unlimited.
 - **The controller keeps running either way.** Giving up on a service does not
   stop the process or the other services; the error is recorded on
   `ServiceInfo.Error`, forwarded on the error channel and logged. If a dead
-  service should take the process down, watch for it and call `Stop()` yourself.
+  service should take the process down, watch the channel for
+  `errors.Is(err, controls.ErrRestartsExhausted)` and call `Stop()` yourself.
 - **But readiness goes false if the service never started at all.** Giving up on
   a service that never once started cleanly means it never will, so the
   controller moves to `UnableToStart` and reports unready. An orchestrator then
