@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.6.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.6.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.5.0...v0.6.0)
+
+### Notes
+
+- A nested module `lint/` ships `singleuse`, an advisory analyzer that names the line where a `StartFunc` captures a server, listener or supervisor a restart cannot reuse. Run it with `go run gitlab.com/phpboyscout/go/controls/lint/cmd/singleuse@latest ./...`. It adds nothing to this module's dependency graph.
+
+### Features
+
+- **lint**: add singleuse, an advisory analyzer for the capture a restart cannot reuse ([22ff7e4](https://gitlab.com/phpboyscout/go/controls/-/commit/22ff7e4e06b250ca24e91a7c7fa0e42b5cd48be0))
+
 ## [v0.5.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.5.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.4.0...v0.5.0)
