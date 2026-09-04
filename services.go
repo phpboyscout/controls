@@ -43,9 +43,16 @@ func noopStart(context.Context) error { return nil }
 
 // Services manages the collection of registered services and their lifecycle.
 type Services struct {
-	mu         sync.Mutex
-	services   []Service
-	info       sync.Map // map[string]ServiceInfo
+	mu       sync.Mutex
+	services []Service
+	info     sync.Map // map[string]ServiceInfo
+	// infoMu serialises every change to an info entry. Reads stay lock-free
+	// through the sync.Map; it is the load-change-store of a writer that has
+	// to be one step, because the supervisor recording how a run ended and the
+	// stop goroutine recording how the stop ended run at the same moment
+	// during shutdown, and whichever stored last used to win with a stale
+	// copy (issue 13).
+	infoMu     sync.Mutex
 	validError ValidErrorFunc
 	// onUnableToStart is called when a service has failed without ever starting
 	// cleanly and has exhausted its restart policy, so it will never start. Set
@@ -241,13 +248,7 @@ func (q *Services) supervise(ctx context.Context, srv Service, errs chan error, 
 	// UnableToStart requires (D4).
 	cleanStart := false
 
-	updateInfo := func(update func(*ServiceInfo)) {
-		if v, ok := q.info.Load(srv.Name); ok {
-			info := v.(ServiceInfo)
-			update(&info)
-			q.info.Store(srv.Name, info)
-		}
-	}
+	updateInfo := func(update func(*ServiceInfo)) { q.mutateInfo(srv.Name, update) }
 
 	if srv.RestartPolicy == nil {
 		q.runOnce(ctx, srv, errs, updateInfo, done)
@@ -450,9 +451,19 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, srv Service, errs c
 // recordStopErr stores how a stop ended, for a service the caller may no longer
 // be holding.
 func (q *Services) recordStopErr(name string, stopErr error) {
+	q.mutateInfo(name, func(i *ServiceInfo) { i.StopErr = stopErr })
+}
+
+// mutateInfo applies update to the named service's ServiceInfo as one step,
+// so two writers cannot lose each other's fields. update must not block: the
+// lock is held across it and every other writer waits.
+func (q *Services) mutateInfo(name string, update func(*ServiceInfo)) {
+	q.infoMu.Lock()
+	defer q.infoMu.Unlock()
+
 	if v, ok := q.info.Load(name); ok {
 		info, _ := v.(ServiceInfo)
-		info.StopErr = stopErr
+		update(&info)
 		q.info.Store(name, info)
 	}
 }
