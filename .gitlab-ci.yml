@@ -51,7 +51,7 @@ variables:
 # the components' image, cache and gating; the components gain a working
 # directory input later and these go away then.
 .lint-module:
-  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.1.1
+  image: registry.gitlab.com/phpboyscout/images/go-tools:v0.2.0
   interruptible: true
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
