@@ -41,17 +41,19 @@ unchanged. `Generation` still reads `0`, and the next `Start` tries again.
 
 ```go
 type Generational[R any] struct {
-    Build   func(ctx context.Context) (R, error)
-    Release func(ctx context.Context, r R) error
-    Probe   func(r R) error
+    Build          func(ctx context.Context) (R, error)
+    Release        func(ctx context.Context, r R) error
+    Probe          func(r R) error
+    ReleaseAttempt time.Duration
 }
 ```
 
 | Field | Required | Contract |
 |---|---|---|
 | `Build` | yes | Called once per `Start`, outside any lock, with the `Start` caller's context. Everything it acquires that needs releasing must be reachable from the `R` it returns, or it leaks. That obligation is the whole contract this type places on a consumer. |
-| `Release` | yes | Called once per generation, with a context bounded to 250ms per attempt (see below). It must be **idempotent**, and it must be **safe to run beside a lease that outlived the stop budget**, because such a lease is disowned rather than waited for. A `nil` return means every resource is gone, and that is the only thing that permits the next `Start`. |
+| `Release` | yes | Called once per generation, with a context bounded to `ReleaseAttempt` per attempt (see below). It must be **idempotent**, and it must be **safe to run beside a lease that outlived the stop budget**, because such a lease is disowned rather than waited for. A `nil` return means every resource is gone, and that is the only thing that permits the next `Start`. |
 | `Probe` | no | Called by `Healthy` with the live value. `nil` means always healthy while a generation is live. |
+| `ReleaseAttempt` | no | The budget each call to `Release` gets. Zero **or negative** selects 250ms: zero because that is what an omitted field holds, negative because an already-expired context is one `Release` could never satisfy, and every later `Start` would then be refused. Set it when `Release` legitimately needs longer, a TLS close over a slow link or a client library with its own drain, rather than making `Release` return early. |
 
 The zero value is not usable: a nil `Build` or `Release` is called and panics.
 The type is safe for concurrent use. `Use` is the hot path and takes no mutex;
@@ -121,20 +123,24 @@ prevent.
 
 | Path | Budget per attempt | Attempts | Context |
 |---|---|---|---|
-| `Stop` (the disposer) | 250ms | unbounded, until `Release` returns `nil` | detached from the caller's: values survive for tracing and logging, cancellation does not |
-| a `Start` that lost a race | 250ms | 4, then the error is returned wrapped | the losing `Start`'s own context, likewise detached |
+| `Stop` (the disposer) | `ReleaseAttempt`, 250ms when zero | unbounded, until `Release` returns `nil` | detached from the caller's: values survive for tracing and logging, cancellation does not |
+| a `Start` that lost a race | `ReleaseAttempt`, 250ms when zero | 4, then the error is returned wrapped | the losing `Start`'s own context, likewise detached |
 
 The disposer never abandons, on purpose. An unreleased generation left behind is
 how a resource the next generation will duplicate stays alive, and a duplicate
 is worse than being unavailable. So a `Release` that ignores its context does
 not leak quietly: it blocks the next `Start` with `ErrPredecessorLive`, loudly,
 and that is a bug in the release path to fix rather than something to work
-around. The 250ms is not configurable; that is tracked in
-[#10](https://gitlab.com/phpboyscout/go/controls/-/issues/10).
+around. A `Release` that needs longer than 250ms per attempt sets
+`ReleaseAttempt`; a cap on the retry is a decision to leak, and nothing here
+makes it.
 
 The synchronous path is bounded where the disposer is not because it runs on
 the caller's goroutine: retrying for ever there would hang `Start` rather than
-merely refuse a later one, and the caller already has an error to act on.
+merely refuse a later one, and the caller already has an error to act on. Its
+ceiling is four times `ReleaseAttempt`, so a consumer that declares a long
+budget accepts a longer worst case on a lost race, which takes two concurrent
+`Start` calls to happen at all.
 
 ## Sentinel errors
 

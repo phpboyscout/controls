@@ -34,10 +34,10 @@ var (
 	ErrStopTimeout = errors.NewSentinel("controls.stop_timeout", "controls: stop budget expired before release completed")
 )
 
-// releaseAttempt bounds one call to Release. The reaper retries rather than
-// abandoning, so this is a retry interval and not a deadline for the whole
-// operation.
-const releaseAttempt = 250 * time.Millisecond
+// defaultReleaseAttempt bounds one call to Release when ReleaseAttempt is
+// unset. The reaper retries rather than abandoning, so this is a retry
+// interval and not a deadline for the whole operation.
+const defaultReleaseAttempt = 250 * time.Millisecond
 
 // releaseAttempts bounds the synchronous release of a generation that lost a
 // concurrent Start.
@@ -101,6 +101,12 @@ type Generational[R any] struct {
 	// Probe reports the health of the current generation. Optional; nil means
 	// always healthy while running.
 	Probe func(r R) error
+
+	// ReleaseAttempt is the budget each call to Release gets. The disposer
+	// retries on this interval until Release returns nil, so it is a retry
+	// interval rather than a deadline for the whole release. Zero or negative
+	// selects 250ms (spec 0007 D1, D2).
+	ReleaseAttempt time.Duration
 
 	// mu guards the start/stop transition and prev. It is never held across
 	// Build or Release, both of which do I/O.
@@ -318,7 +324,7 @@ func (g *Generational[R]) releaseNow(parent context.Context, value R) error {
 	detached := context.WithoutCancel(parent)
 
 	for attempt := range releaseAttempts {
-		ctx, cancel := context.WithTimeout(detached, releaseAttempt)
+		ctx, cancel := context.WithTimeout(detached, g.releaseBudget())
 		err := g.Release(ctx, value)
 
 		cancel()
@@ -341,7 +347,7 @@ func (g *Generational[R]) dispose(parent context.Context, inst *installed[R]) {
 	inst.releaseOnce.Do(func() {
 		go func() {
 			for {
-				ctx, cancel := context.WithTimeout(detached, releaseAttempt)
+				ctx, cancel := context.WithTimeout(detached, g.releaseBudget())
 				err := g.Release(ctx, inst.value)
 
 				cancel()
@@ -354,6 +360,18 @@ func (g *Generational[R]) dispose(parent context.Context, inst *installed[R]) {
 			close(inst.done)
 		}()
 	})
+}
+
+// releaseBudget is what one call to Release gets. Zero and negative both
+// select the default: zero is what an omitted field holds, and a negative
+// duration is a context already expired, which Release could never satisfy
+// and which would then refuse every later Start (spec 0007 D2).
+func (g *Generational[R]) releaseBudget() time.Duration {
+	if g.ReleaseAttempt <= 0 {
+		return defaultReleaseAttempt
+	}
+
+	return g.ReleaseAttempt
 }
 
 func (g *Generational[R]) release(inst *installed[R]) {

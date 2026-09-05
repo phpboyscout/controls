@@ -93,7 +93,9 @@ rather than honest-but-hanging, and it is the deliberate trade.
 ## When the next start is refused
 
 `Release` is retried until it succeeds, because a resource left live while its
-successor duplicates it is worse than being unavailable. So a `Release` that
+successor duplicates it is worse than being unavailable. Each attempt gets
+250ms unless you set `ReleaseAttempt`; set it when your `Release` genuinely
+needs longer, rather than making it return before everything is gone. So a `Release` that
 never returns blocks the next `Start` with `ErrPredecessorLive`, loudly. A
 `Start` while a generation is already live is refused too, with
 `ErrGenerationRunning`, rather than building a rival alongside it.

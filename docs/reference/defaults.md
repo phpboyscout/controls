@@ -71,7 +71,7 @@ The full contract is on the [Generational](generational.md) page.
 
 | Setting | Default | Changed by | Notes |
 |---|---|---|---|
-| `Release` budget per attempt | **250ms** | not configurable | The disposer retries `Release` on that interval until it returns `nil`. A configurable budget is tracked in [#10](https://gitlab.com/phpboyscout/go/controls/-/issues/10). |
+| `ReleaseAttempt` | **250ms** | the field | The budget each call to `Release` gets; the disposer retries on that interval until `Release` returns `nil`. Zero or negative selects the default. |
 | `Probe` | `nil`, always healthy while a generation is live | the field | `Healthy` still returns `ErrNoGeneration` with no live generation. |
 
 ## Which defaults are exported
