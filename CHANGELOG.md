@@ -1,5 +1,27 @@
 # Changelog
 
+## [v0.7.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.7.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.6.0...v0.7.0)
+
+### Notes
+
+- `Generational` gains a `ReleaseAttempt` field, the budget each call to `Release` gets. Zero or negative keeps the 250ms default, so nothing changes unless you set it. The retry until `Release` returns `nil` is unchanged; only each attempt's length is yours.
+
+- A consumer that replaces the error channel with `SetErrorsChannel` is now its only receiver: the controller neither reads nor logs from a replaced channel, so every forwarded error reaches the consumer. Before, the controller's own handler competed for it and a consumer could miss errors. If you relied on the controller logging errors from a channel you replaced, log them yourself.
+
+- `ErrRestartsExhausted` is inside the error a service leaves on `ServiceInfo.Error` and `Errors()` when it has used up its restart policy, and inside a child's `Failure.Err`. Test for it with `errors.Is`; the last error still matches beside it, and no message changes.
+
+### Features
+
+- **lifecycle**: let a Generational set the budget each Release call gets ([9a242cf](https://gitlab.com/phpboyscout/go/controls/-/commit/9a242cfd692f86ae7ffa0b922778d6eb181b47e1))
+- **services**: export ErrRestartsExhausted, and keep the last error beside it ([90fd27e](https://gitlab.com/phpboyscout/go/controls/-/commit/90fd27e8220659aed75f5b06c70d6e501618388e))
+
+### Bug Fixes
+
+- **controller**: stop reading an error channel a consumer replaced ([a41004f](https://gitlab.com/phpboyscout/go/controls/-/commit/a41004f0dd32735ff3706f33e0516d06a0ea1f6f))
+- **services**: serialise the writers of a service's ServiceInfo ([45a50a1](https://gitlab.com/phpboyscout/go/controls/-/commit/45a50a1c7c6f2aab210ea114e895a5746fdf88da))
+
 ## [v0.6.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.6.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.5.0...v0.6.0)
