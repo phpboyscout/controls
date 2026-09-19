@@ -7,3 +7,8 @@
 # directory; it only cuts the tag.
 tag_also:
   - lint
+
+# Announcements (colophon spec 0026): opt-in, per project. The feed's settings
+# come from the cicd colophon component.
+announce:
+  file: {}
