@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.7.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.7.1)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.7.0...v0.7.1)
+
+### Bug Fixes
+
+- **deps**: update module golang.org/x/tools to v0.50.0 ([b9b6ce6](https://gitlab.com/phpboyscout/go/controls/-/commit/b9b6ce655d89cd0bf93b026f9bc172cc2f90accd))
+
 ## [v0.7.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.7.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.6.0...v0.7.0)
