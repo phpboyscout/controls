@@ -22,6 +22,10 @@ include:
     inputs:
       branch: main
       stage: release
+  - component: gitlab.com/phpboyscout/cicd/go-core-currency@main
+    inputs:
+      feed: https://phpboyscout.uk/projects.json
+      stage: release
   - component: gitlab.com/phpboyscout/cicd/zensical-pages@main
 
 stages:
