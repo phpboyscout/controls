@@ -1,5 +1,58 @@
 # Changelog
 
+## [v0.8.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.7.1...v0.8.0)
+
+### Notes
+
+- Adds `Outcome`, `Done` and `WithOnEvent`, and changes how `Errors()` behaves:
+
+  - The controller no longer reads the error channel. A consumer reading
+    Errors() gets every failure decided before shutdown and after its first
+    call, with a waiting retry replaced by a newer one, as long as it reads
+    until the channel closes. Calling Errors() subscribes: failures before
+    the first call are not delivered, so a consumer that must see a boot
+    failure calls it before Start or uses WithOnEvent. A reader that stops
+    early delays shutdown by up to the remaining budget whenever errors are
+    queued for it.
+  - The controller's own error channel is closed when it is done; a
+    receive after that returns nil, false. A channel installed with
+    SetErrorsChannel is not closed, nothing is sent on it after Done, and a
+    reader of a buffered one takes what is still buffered after Done.
+  - Wait and WaitContext can return later: shutdown now includes
+    delivering queued events, up to the remaining budget when a consumer is
+    slow.
+  - A WithOnEvent callback can run after Stopped, and one in progress at
+    the deadline can outlive Done.
+  - Supervisors no longer block on an undrained channel installed with
+    SetErrorsChannel; the forwarder holds the backlog instead.
+  - Sending on the channel Errors() returns now blocks, since nothing in
+    the controller reads it, and panics once it is closed.
+  - Health-breach retries now arrive on the error channel, where they were
+    absent.
+  - A consumer using SetErrorsChannel now gets the controller's logging
+    too, and may log each failure twice.
+  - The controller's failure log line changes from "control error" to one
+    naming the kind, with service_name and kind attributes.
+  - A health breach noticed after shutdown begins is no longer reported as
+    a retry or an exhaustion.
+  - Health probes are called outside the services mutex, so two reports
+    built at once may call a probe concurrently, and a slow probe no longer
+    blocks shutdown. A probe must be safe to call concurrently with itself.
+  - The shutdown budget starts when shutdown is triggered, not when the
+    stop message is processed.
+  - ServiceInfo.StopErr changes in three ways: it holds ErrStopAbandoned
+    for a stop abandoned at the deadline or never awaited because the
+    budget had gone, where it held nil; a stop that
+    returns after being abandoned no longer overwrites it; and a clean
+    shutdown stop now writes nil, clearing an error an earlier
+    health-triggered stop left there.
+
+### Features
+
+- say why a controller stopped, and stop competing for its error channel ([3890cf4](https://gitlab.com/phpboyscout/go/controls/-/commit/3890cf4a794bcaf7b09dbf05931b9b120e1f9981))
+
 ## [v0.7.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.7.1)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.7.0...v0.7.1)
