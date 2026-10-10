@@ -47,16 +47,17 @@ a release-train question.
 
 ## Where it has got to
 
-Pre-1.0 at `v0.3.2`, with `Supervisor` on `feat/supervisor` (spec 0002) and not
-yet released. Before it, no Go source had changed since `v0.3.0` adopted
-`go/errors` in early August; behaviour last moved at `v0.2.0` (single-owner
-signal handling) and `v0.1.4` (a run of concurrency fixes, each with its own
-regression test file). So `Controller` is settled and `Supervisor` is new, which
-is the split to keep in mind before treating any part of the surface as proven.
-The docs are a full Diátaxis set at
-[controls.go.phpboyscout.uk](https://controls.go.phpboyscout.uk), but issue #3
-tracks a prose pass over them and the README: parts of both still describe an
-older dependency footprint, so check before repeating either.
+Pre-1.0 at `v0.7.1`. `Controller` is the settled part: its behaviour moved at
+`v0.2.0` (single-owner signal handling) and `v0.1.4` (a run of concurrency fixes,
+each with its own regression test file), and since then only in narrow fixes.
+Everything else is newer. `Supervisor` (spec 0002) landed in `v0.4.0`,
+`WithStopErr` and `Generational` in `v0.5.0`, the `singleuse` analyzer (the
+nested `lint/` module) in `v0.6.0`, and an exported `ErrRestartsExhausted` in
+`v0.7.0`. Keep that split in mind before treating any part of the surface as
+proven. Issues #15 to #19 came out of go-tool-base's review and interlock around
+a stop cause, so check them before changing how a controller stops or reports a
+failure. The docs are a full Diátaxis set at
+[controls.go.phpboyscout.uk](https://controls.go.phpboyscout.uk).
 
 ## Traps
 
@@ -76,12 +77,12 @@ defined in this repo.** `D8` to `D12` are in `docs/explanation/concurrency.md`,
 requests that introduced them. Cite an existing one when extending its decision;
 do not mint the next number for your own change.
 
-**The Release MR carries `squash: true` on purpose, on a fast-forward project.**
-This repo is `merge_method: ff` with squash off by default, and a merge producing
-neither a merge commit nor a squash commit sends releaser-pleaser to a fallback
-that tags the MR's recorded head, which GitLab's rebase leaves stale, dropping
-whatever landed while the MR was open. Turning that flag off looks like tidying an
-inconsistency. It is not: [phpboyscout/cicd#7](https://gitlab.com/phpboyscout/cicd/-/issues/7).
+**Releases go through colophon, not releaser-pleaser.** The repo moved in
+August (`adc5b76`), so a note written in the release MR's description is lost:
+colophon regenerates it on every run. Release notes go in the commit message, as
+a `Release-Note:` trailer or a fenced `release-note` block, before the change
+merges. `.colophon.yaml` also tags `lint/vX.Y.Z` beside every root tag, and that
+second tag is what lets Go resolve the nested module, so it stays.
 
 ## The quality gate
 
@@ -189,7 +190,6 @@ to match the tests around them is the obvious tidy-up and silently breaks them.
 | Before `glab mr create` on this repo | `verify-before-pr` |
 | Writing a commit message or a merge request description | `conventional-commits`, `pre-1-0-release-safety` |
 | Committing, branching, merging, or opening a merge request | `forge-publish-workflow` |
-| Anything touching the Release MR | `releaser-pleaser-releases` |
 
 > Skills are a Claude Code mechanism, shipped by the
 > [phpboyscout marketplace](https://gitlab.com/phpboyscout/claude-code-plugins).
@@ -198,8 +198,8 @@ to match the tests around them is the obvious tidy-up and silently breaks them.
 
 ## House rules
 
-- Linear history. Rebase and fast-forward; never squash-merge from the UI. The
-  Release MR is the documented exception, above.
+- Linear history. Rebase and fast-forward; never squash-merge from the UI, the
+  Release MR included.
 - Conventional Commits, and the type decides whether a release is cut. Only
   `feat` and `fix` release, and `fix(deps)` counts. A change that repoints or
   removes a public interface is `feat`, not `refactor`, or it never ships.
