@@ -129,18 +129,26 @@ func TestController_SetState(t *testing.T) {
 	assert.True(t, c.IsStopped())
 }
 
-// The controller logs what arrives on its own error channel. A replaced
-// channel is the consumer's and is not read here; see
-// TestAReplacedErrorChannelHasOneReceiver.
+// A failure is logged where it happens, with its service and kind, whether or
+// not anything reads the error channel (spec 0008 D7).
 func TestController_Errors(t *testing.T) {
 	c, _, output := getNewController(context.Background())
+	c.Register("broken", controls.WithStart(func(context.Context) error {
+		return fmt.Errorf("test error") //nolint:goerr113
+	}))
 
 	c.Start()
-	c.Errors() <- fmt.Errorf("test error") //nolint:goerr113
 
 	assert.Eventually(t, func() bool {
-		return strings.Contains(output.String(), "test error")
+		out := output.String()
+
+		return strings.Contains(out, "test error") &&
+			strings.Contains(out, "service_name=broken") &&
+			strings.Contains(out, "kind=unable_to_start")
 	}, 1*time.Second, 10*time.Millisecond)
+
+	c.Stop()
+	<-c.Done()
 }
 
 func TestController_ContextCancel(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 
 // A consumer that replaces the error channel before Start is the receiver, the
 // only one. Twenty services each fail once into a channel nothing reads until
-// shutdown is over: every error must still be there. When the controller's own
-// handler competes for the channel, it eats a share and logs them instead,
-// and the consumer never sees those (issue 14).
+// shutdown is over: every error must still be there, since Wait returns after
+// the forwarder's drain. When the controller's own handler competed for the
+// channel, it ate a share and logged them instead (issue 14).
 func TestAReplacedErrorChannelHasOneReceiver(t *testing.T) {
 	t.Parallel()
 
@@ -51,12 +51,14 @@ func TestAReplacedErrorChannelHasOneReceiver(t *testing.T) {
 	require.Len(t, errs, services, "every forwarded error must reach the consumer's channel")
 }
 
-// A controller whose channel was not replaced still drains and logs its own,
-// so a failing service never blocks its supervisor on a channel nobody reads.
-func TestTheDefaultErrorChannelIsStillDrainedByTheController(t *testing.T) {
+// A controller whose error channel nobody subscribed to has no forwarder, so a
+// failing service blocks nothing and shutdown does not wait on the channel.
+func TestAnUnsubscribedControllerWithAFailedServiceStopsPromptly(t *testing.T) {
 	t.Parallel()
 
-	c := controls.NewController(context.Background())
+	// A budget far past the timer below, so a forwarder blocked on the unread
+	// channel fails this rather than racing it.
+	c := controls.NewController(context.Background(), controls.WithShutdownTimeout(time.Minute))
 	c.Register("svc", controls.WithStart(func(context.Context) error { return errors.New("boom") }))
 	c.Start()
 
@@ -77,6 +79,6 @@ func TestTheDefaultErrorChannelIsStillDrainedByTheController(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("shutdown hung: the unreplaced channel was not drained")
+		t.Fatal("shutdown hung on a channel nobody subscribed to")
 	}
 }

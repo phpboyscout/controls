@@ -12,7 +12,7 @@ rest are internal values applied when you leave a field at zero.
 | Logger | `slog.New(slog.DiscardHandler)`, silent | `WithLogger(l)` | Passing `nil` panics inside `NewController`. |
 | OS signal handling | none | `WithSignals()` | Without it the signal channel stays `nil` and no `signal.Notify` registration is made. |
 | Signal channel buffer | 1 slot | not configurable | — |
-| Message and error channels | unbuffered | `SetMessageChannel` / `SetErrorsChannel`, before `Start` only | A replaced error channel is read only by you; the controller logs nothing from it. |
+| Message and error channels | unbuffered | `SetMessageChannel` / `SetErrorsChannel`, before `Start` only | The controller reads neither error channel; it logs each failure where it happens. Its own error channel is fed once `Errors()` is called and closed before `Done`; an installed one is never closed. |
 | Valid-error predicate | none: every non-nil `StartFunc` error is a failure | `WithValidError(fn)` | — |
 | Lifecycle state at construction | `NeverStarted` | — | Registration is only honoured in this state. A `Controller` built without `NewController` holds the zero value, which `GetState` reports as `Unknown`. |
 

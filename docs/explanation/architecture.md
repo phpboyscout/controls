@@ -44,7 +44,7 @@ stateDiagram-v2
   The only state in which the controller reports **ready**.
 - **`UnableToStart`**: a registered service has failed without ever starting
   cleanly and has exhausted its restart policy, so it will never start. Nothing
-  is stopped and the error still reaches the error channel; what changes is that
+  is stopped and the failure is still reported; what changes is that
   readiness goes false, so an orchestrator routes no traffic to a process that
   cannot do its job.
 - **`Stopping`**: a shutdown has been initiated; stop callbacks are running.
@@ -95,13 +95,14 @@ enabled and two otherwise, because the signal handler is only launched if
 | Goroutine | Watches | Job |
 |---|---|---|
 | **Signal handler** | the OS-signal channel | first `SIGINT`/`SIGTERM` triggers `Stop`; a second forces the handler to exit. Only launched when `WithSignals` supplied a channel |
-| **Error and context handler** | the error channel and the **parent** context's `Done()` | logs forwarded service errors; triggers `Stop` when the context you passed to `NewController` is cancelled or its deadline expires |
+| **Parent watch** | the **parent** context's `Done()` | triggers `Stop` when the context you passed to `NewController` is cancelled or its deadline expires |
 | **Message processor** | the message channel | runs the shutdown sequence when it receives `Stop`, the only control message the package defines |
 
 Each service runs under its own **supervisor** goroutine, which invokes
-`WithStart`, classifies the outcome, applies the restart policy, and forwards
-genuine errors on the error channel (see
-[The restart supervisor](restart-supervisor.md)).
+`WithStart`, classifies the outcome, applies the restart policy, and logs each
+genuine failure before queueing it for the `WithOnEvent` callback and the error
+channel, each fed by a forwarder goroutine of its own that exists only when that
+consumer does (see [The restart supervisor](restart-supervisor.md)).
 
 All of these goroutines share one exit condition: a `shutdownComplete` channel
 that the shutdown handler closes once the sequence finishes. Watching it lets

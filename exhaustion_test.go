@@ -3,7 +3,6 @@ package controls_test
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -12,36 +11,14 @@ import (
 	"gitlab.com/phpboyscout/go/controls"
 )
 
-// errorTap is a slog handler that forwards the "error" attribute of every
-// record to a channel. The controller's own handler competes with a test for
-// Errors(), so whichever of the two wins, the test sees the error here.
-type errorTap struct {
-	out chan<- error
-}
+// subscribedController returns a controller and its error channel, subscribed
+// before Start so no failure precedes the subscription.
+func subscribedController(t *testing.T) (*controls.Controller, chan error) {
+	t.Helper()
 
-func (h errorTap) Enabled(context.Context, slog.Level) bool { return true }
-func (h errorTap) WithAttrs([]slog.Attr) slog.Handler       { return h }
-func (h errorTap) WithGroup(string) slog.Handler            { return h }
+	c := newQuietController(t)
 
-func (h errorTap) Handle(_ context.Context, r slog.Record) error {
-	r.Attrs(func(a slog.Attr) bool {
-		if err, ok := a.Value.Any().(error); ok && a.Key == "error" {
-			h.out <- err
-		}
-
-		return true
-	})
-
-	return nil
-}
-
-// tappedController returns a controller whose forwarded errors all reach errs,
-// whether the test or the controller's handler received them first.
-func tappedController(errs chan error) *controls.Controller {
-	c := controls.NewController(context.Background(), controls.WithLogger(slog.New(errorTap{out: errs})))
-	c.SetErrorsChannel(errs)
-
-	return c
+	return c, c.Errors()
 }
 
 // exhaustionOf drains errs until one carries ErrRestartsExhausted, or gives up.
@@ -66,9 +43,7 @@ func TestExhaustionAfterFailedRunsCarriesTheSentinelAndTheLastError(t *testing.T
 	t.Parallel()
 
 	errBoom := errors.New("boom")
-	errs := make(chan error, 16)
-
-	c := tappedController(errs)
+	c, errs := subscribedController(t)
 	c.Register("svc",
 		controls.WithStart(func(context.Context) error { return errBoom }),
 		controls.WithRestartPolicy(controls.RestartPolicy{MaxRestarts: 1, InitialBackoff: time.Millisecond}),
@@ -94,9 +69,7 @@ func TestExhaustionAfterFailedRunsCarriesTheSentinelAndTheLastError(t *testing.T
 func TestHealthDrivenExhaustionIsTheSentinelAlone(t *testing.T) {
 	t.Parallel()
 
-	errs := make(chan error, 16)
-
-	c := tappedController(errs)
+	c, errs := subscribedController(t)
 	c.Register("svc",
 		controls.WithStart(func(context.Context) error { return nil }),
 		controls.WithStatus(func() error { return errors.New("unwell") }),
@@ -122,9 +95,7 @@ func TestAFailureWithNoPolicyIsNotExhaustion(t *testing.T) {
 	t.Parallel()
 
 	errBoom := errors.New("boom")
-	errs := make(chan error, 16)
-
-	c := tappedController(errs)
+	c, errs := subscribedController(t)
 	c.Register("svc", controls.WithStart(func(context.Context) error { return errBoom }))
 	c.Start()
 

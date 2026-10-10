@@ -34,11 +34,12 @@ forwarded on the error channel and logged; the controller stays `Running` and
 every other service carries on. The controller stops only on `Stop()`, on a
 signal it owns via `WithSignals`, or when the parent context completes.
 
-If a failed service should take the process with it, watch for it yourself
-(consume the error channel with `SetErrorsChannel` before `Start`, which makes
-you its only receiver, or poll `GetServiceInfo`) and call `Stop()`. The moment
-a service gives up is recognisable: its error satisfies `errors.Is` against
-`ErrRestartsExhausted`, on the channel and on `ServiceInfo.Error`.
+If a failed service should take the process with it, watch for it yourself and
+call `Stop()`. `WithOnEvent` gives you a typed `ServiceEvent` for every failure:
+react to the terminal kinds, `EventFailed` and `EventUnableToStart`, and ignore
+`EventRetrying`, which the restart policy is already handling. Calling `Stop()`
+from the callback is supported. The error channel carries the same failures as
+bare errors, without their kind, and only from your first `Errors()` call.
 
 ## A health report is not proof a service is running
 
@@ -134,15 +135,19 @@ Since v0.2.0 the controller owns its own cancellation, so `context.Cause(ctx)` i
 cancellation, an expired parent deadline, or a signal. That is the point: the
 guarantee is unconditional. The cost is that the cause no longer distinguishes
 those triggers. A service that needs to know watches the parent context itself.
+The controller's owner reads `Outcome()` once `Done()` has closed: its `Cause`
+says which trigger started the shutdown, with the parent's cause or the signal.
 
 ## Wait can still hang on a start callback that ignores cancellation
 
 The shutdown sequence is bounded, and it abandons a stuck supervisor at the
-deadline while naming the service in a `WARN`. The bare `Wait()` is not bounded:
-it promises every supervisor goroutine has unwound, which a `StartFunc` that
-never returns after cancellation makes impossible. Use `WaitContext(ctx)` when a
-service wraps third-party code you cannot make cancellable; it returns
-`ctx.Err()` and leaks the stuck goroutine rather than blocking forever.
+deadline while naming the service in a `WARN` and in `Outcome().Unfinished`. The
+bare `Wait()` is not bounded: it waits until every service has either started
+cleanly or had its supervisor goroutine exit, which a `StartFunc` that fails,
+then never returns after cancellation on its retry, makes impossible. Wait on
+`Done()` to know shutdown has finished; use `WaitContext(ctx)` when you need the
+supervisors themselves, as it returns `ctx.Err()` and leaks the stuck goroutine
+rather than blocking forever.
 
 ## There is no restart curve to tune, and no jitter
 
@@ -151,11 +156,12 @@ Backoff doubles from `InitialBackoff` to `MaxBackoff`. The multiplier is fixed a
 own. A fleet of instances restarting against the same downed dependency will
 retry in step.
 
-## There are no metrics, traces or lifecycle events
+## There are no metrics, traces or start events
 
-No counters, no OpenTelemetry and no event stream of restarts. The observable
-surface is the `*slog.Logger` you inject, the error channel, `GetState()`,
-`GetServiceInfo`, and the health reports.
+No counters, no OpenTelemetry, and no event for a start or a clean stop. The
+observable surface is the `*slog.Logger` you inject, failures through
+`WithOnEvent` and the error channel, `GetState()`, `GetServiceInfo`,
+`Outcome()`, and the health reports.
 
 The one exception is a `Supervisor`, which fires `WithOnFailure` and sends on
 `Failures()` when a child reaches a terminal failure. That is a single

@@ -35,9 +35,10 @@ to adopt.
   (`*slog.Logger`). Everything else is functional options.
 - **Correct concurrency.** Idempotent `Start`/`Stop`; goroutines that terminate
   on shutdown rather than leak or busy-spin; a restart supervisor that
-  distinguishes a clean start from a cancellation from a failure and never floods
-  the error channel; a stop callback that overruns the shutdown deadline is
-  abandoned rather than waited for; readiness fails closed until the first async
+  distinguishes a clean start from a cancellation from a failure; failures
+  delivered to a callback or the error channel without ever blocking a service;
+  a stop callback that overruns the shutdown deadline is abandoned rather than
+  waited for, and the shutdown's `Outcome` says so; readiness fails closed until the first async
   health check has run. Race-clean under `-race`.
 - **Transport-agnostic health.** `Status()`, `Liveness()` and `Readiness()`
   return plain `HealthReport` values. The module does **not** open a port or

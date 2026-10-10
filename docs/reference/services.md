@@ -43,7 +43,7 @@ call it:
 
 ### StartFunc: `func(ctx context.Context) error`
 
-| Return | Classified as | Restarted? | Forwarded on the error channel? |
+| Return | Classified as | Restarted? | Reported as a failure? |
 |---|---|---|---|
 | `nil` | clean start: the service is serving in the background | never | no |
 | any error while `ctx` is already cancelled, or `context.Canceled` | cancelled | never | no |
@@ -132,7 +132,7 @@ type RestartPolicy struct {
 | `RestartResetInterval` | use the default | 30s (`DefaultRestartResetInterval`) | How long a run must last before the consecutive-failure counter **and** the backoff reset. |
 
 Attaching a policy is what enables restarts at all. Without one, a `StartFunc`
-error is recorded in `ServiceInfo`, forwarded on the error channel, and the
+error is recorded in `ServiceInfo`, reported as an `EventUnableToStart`, and the
 service is left stopped.
 
 The same type governs a `Supervisor`'s children, read through the same helpers,
@@ -152,16 +152,19 @@ supervising that service and records an error that `errors.Is` matches against
   message is `max restarts exceeded`, because the health failure was recorded
   on `ServiceInfo.Error` rather than returned.
 
-That error is stored on `ServiceInfo.Error` and forwarded on the error channel.
+That error is stored on `ServiceInfo.Error` and carried by the terminal
+`ServiceEvent`, `EventFailed` or `EventUnableToStart`, and on the error channel.
 A consumer that wants the process to end when a service will not come back
-tests for the sentinel on the channel and calls `Stop()`:
+reacts to those kinds and calls `Stop()`:
 
 ```go
-for err := range errs {
-	if errors.Is(err, controls.ErrRestartsExhausted) {
+var c *controls.Controller
+
+c = controls.NewController(ctx, controls.WithOnEvent(func(ev controls.ServiceEvent) {
+	if ev.Kind != controls.EventRetrying {
 		c.Stop()
 	}
-}
+}))
 ```
 
 **The controller keeps running.** A service exhausting its restarts, or failing

@@ -37,9 +37,10 @@ any project can adopt it **without** pulling in the framework.
 - **Stdlib seams.** The only logging seam is a `*slog.Logger`; omit it and the
   controller logs to a discard handler. Everything else is functional options.
 - **Correct concurrency.** Idempotent `Start`/`Stop`; a restart policy that
-  distinguishes a clean start from a cancellation from a failure and never floods
-  the error channel; a stop callback that overruns the shutdown deadline is
-  abandoned rather than waited for; readiness fails closed until the first async
+  distinguishes a clean start from a cancellation from a failure; failures
+  delivered to a callback or the error channel without ever blocking a service;
+  a stop callback that overruns the shutdown deadline is abandoned rather than
+  waited for, and the shutdown's `Outcome` says so; readiness fails closed until the first async
   health check has run. Race-clean under `-race`.
 
 ## Install

@@ -47,16 +47,19 @@ apply one after construction that is safe once the controller is running; see
 | `WithLogger` | `WithLogger(l *slog.Logger)` | discard handler | Stores `l.With("component", "controller")`. Passing `nil` **panics with a nil pointer dereference inside `NewController`**. Omit the option instead if you want no logging. |
 | `WithShutdownTimeout` | `WithShutdownTimeout(d time.Duration)` | `DefaultShutdownTimeout` (5s) | Bounds the **whole** stop phase, not each callback. A zero or negative `d` is not "use the default": it produces an already-expired budget, so stop callbacks are abandoned the instant they are launched and may never run at all. |
 | `WithSignals` | `WithSignals()` | no signal handling | Creates a signal channel with a one-slot buffer. `signal.Notify` for `SIGINT`/`SIGTERM` is registered in `Start`, not at construction, and detached again at shutdown. Do not use it under a CLI framework that already turns signals into cancellation. |
+| `WithOnEvent` | `WithOnEvent(fn func(ServiceEvent))` | none | Delivers every terminal service failure, and the latest of each run of retries, to `fn` on a goroutine of its own, in order. A retry waiting behind a slow `fn` is replaced by a newer one. `fn` may call `Stop`. A panic in it is recovered and logged. See [Events](#service-events). |
 | `WithValidError` | `WithValidError(fn func(error) bool)` | none | A `StartFunc` error for which `fn` returns true is classified as a normal end of run: not restarted, not counted, not forwarded on the error channel. Applies to every registered service; there is no per-service variant. (A `Supervisor`'s `Child` has its own `ValidError` field.) |
 
 ## Lifecycle methods
 
 | Method | Blocks? | Effect | Called at the wrong time |
 |---|---|---|---|
-| `Start()` | no | `NeverStarted → Running`, then launches one supervisor goroutine per registered service, the async health-check goroutines, and the control goroutines (message processor, error/context handler, and the signal handler if `WithSignals` was passed). | Any state other than `NeverStarted`: logs `WARN "Start called, but controller has already started; ignoring"` and returns. A controller is **single-use**; after `Stopped` it cannot be started again. |
-| `Stop()` | no | `Running → Stopping`, **or** `UnableToStart → Stopping`, then sends `Stop` on the message channel. Returns before the shutdown sequence has finished. | Any other state: logs `WARN "Stop called, but not in expected state, unable to continue"` and returns. Before any `Start` that means it is a no-op and the controller stays startable. Safe to call concurrently or repeatedly. |
-| `Wait()` | yes, unbounded | Blocks until every supervisor goroutine has exited *and* the shutdown sequence has completed. | Before `Start`, the wait group is empty and it returns immediately. It never returns while a `StartFunc` refuses to return after cancellation; use `WaitContext` for that case. |
-| `WaitContext(ctx)` | yes, bounded | Returns `nil` when the wait group drains, or `ctx.Err()` when `ctx` completes first. | On the abandoned path the stuck supervisor goroutines and one internal helper goroutine are deliberately leaked. |
+| `Start()` | no | `NeverStarted → Running`, then launches one supervisor goroutine per registered service, the async health-check goroutines, the event forwarders it needs, and the control goroutines (message processor, parent watch, and the signal handler if `WithSignals` was passed). | Any state other than `NeverStarted`: logs `WARN "Start called, but controller has already started; ignoring"` and returns. A controller is **single-use**; after `Stopped` it cannot be started again. |
+| `Stop()` | no | `Running → Stopping`, **or** `UnableToStart → Stopping`, recording `CauseStop` and the shutdown deadline, then sends `Stop` on the message channel. Returns before the shutdown sequence has finished. Safe to call from a `WithOnEvent` callback. | Any other state: logs `WARN "Stop called, but not in expected state, unable to continue"` and returns. Before any `Start` that means it is a no-op and the controller stays startable. Safe to call concurrently or repeatedly. |
+| `Wait()` | yes, unbounded | Blocks until the shutdown sequence has completed, every async health check has exited, and every service has either started cleanly or had its supervisor goroutine exit. The sequence includes delivering queued events, so a slow consumer delays it by up to the shutdown budget. | Before `Start`, the wait group is empty and it returns immediately. It never returns while a service whose `Start` failed has a retry that ignores cancellation; use `Done` or `WaitContext` for that case. |
+| `WaitContext(ctx)` | yes, bounded | Returns `nil` when what `Wait` waits for is done, or `ctx.Err()` when `ctx` completes first. | On the abandoned path the stuck supervisor goroutines and one internal helper goroutine are deliberately leaked. |
+| `Done()` | n/a | Returns a channel closed when the shutdown sequence has finished, whatever triggered it, within the shutdown timeout of the trigger. The same channel every call. | Before `Start` it stays open: nothing has stopped. |
+| `Outcome()` | no | Returns `(Outcome, true)` once the controller's own shutdown sequence has written it, which happens as it reaches `Stopped`. A copy each call. | `(Outcome{}, false)` before that, and after a `SetState(Stopped)` from outside, which runs no shutdown. |
 
 `Wait` and `WaitContext` are methods on the concrete `*Controller` only; they are
 on no interface, including `Controllable`.
@@ -99,15 +102,89 @@ services mutex.
 processor acts on. Sending `controls.Stop` directly on `Messages()` drives the
 same shutdown sequence as calling `Stop()`.
 
-The error channel's only receiver is the controller's error handler, which logs
-each error at `ERROR` level (except `context.Canceled`, which it drops) and
-exits when shutdown completes. Every internal send is guarded against that exit,
-so a late error is dropped rather than blocking a supervisor. If you replace the
-channel with `SetErrorsChannel` before `Start` to consume errors yourself, you
-become that receiver, the only one: the controller's handler reads and logs
-nothing from a replaced channel, so every forwarded error is yours and so is
-the logging. Keep draining it; an unread error blocks the supervisor that sent
-it until shutdown completes.
+The controller never reads the error channel. It logs each failure at `ERROR`
+where it happens, with `service_name` and `kind`, and delivers the error to the
+channel through a forwarder that is the channel's only sender, so a slow reader
+never blocks a service.
+
+- **Calling `Errors()` subscribes.** Failures before your first call are not
+  delivered. Call it before `Start`, or use `WithOnEvent`, if you must see a
+  service fail at boot.
+- **Read the controller's own channel until it closes**, which it does before
+  `Done` closes. A reader that stops early holds `Done`, and `Wait`, back by up to
+  the shutdown budget whenever errors are queued for it.
+- **A channel you install with `SetErrorsChannel`** before `Start` is subscribed
+  from `Start`. It is yours, so the controller never closes it, and sends nothing
+  on it after `Done`. Read it until `Done`, then take whatever is still buffered.
+- **Never send on `Errors()`.** Nothing receives, so the send blocks until the
+  channel closes, and then panics.
+
+The channel carries the same failures as `WithOnEvent`, as bare errors.
+
+## Service events
+
+```go
+type ServiceEvent struct {
+	Service  string
+	Kind     EventKind
+	Err      error
+	Restarts int
+}
+```
+
+| `Kind` | When | `Err` |
+|---|---|---|
+| `EventRetrying` | A run failed and the restart policy will run it again, including after a health-threshold breach. | The run's error, or `health check failed: …` for a breach. |
+| `EventFailed` | Terminal. The service started cleanly at least once, then failed and exhausted its policy. | Satisfies `errors.Is(err, ErrRestartsExhausted)`; after health breaches it is the sentinel alone. |
+| `EventUnableToStart` | Terminal. The service never started cleanly and will not be tried again, including a service with no restart policy failing once. | As above, or the `StartFunc`'s error for a service with no policy. |
+
+`Restarts` is the consecutive-restart count, which resets after a healthy run;
+for a terminal event it is the count the service gave up at. A failure noticed
+after shutdown has cancelled the services' context is not reported. Events queued
+when shutdown begins are delivered within the remaining budget, and the number
+left undelivered at the deadline is logged.
+
+A `WithOnEvent` callback can run after the controller reaches `Stopped`, and one
+still running at the deadline can outlive `Done`, because a callback cannot be
+interrupted. A callback that calls `Wait` or blocks on `Done` holds up its own
+drain until the budget expires.
+
+## The shutdown outcome
+
+```go
+type Outcome struct {
+	Cause      StopCause
+	Err        error     // context.Cause of the parent, for CauseParent
+	Signal     os.Signal // for CauseSignal
+	Service    string    // for CauseGaveUp and CauseCompleted
+	Unfinished []Unfinished
+}
+
+type Unfinished struct {
+	Service string
+	Reason  UnfinishedReason
+	Err     error // the stop's error, for StopFailed
+}
+```
+
+| `StopCause` | Trigger |
+|---|---|
+| `CauseStop` | `Stop()`, or `Stop` sent on `Messages()` |
+| `CauseSignal` | the first signal on a channel `WithSignals` owns |
+| `CauseParent` | the parent context's cancellation or deadline |
+| `CauseGaveUp`, `CauseCompleted` | reserved: nothing produces them yet |
+
+Exactly one cause is recorded however many triggers race, and the shutdown
+deadline is recorded with it, so the budget runs from the trigger.
+
+| `UnfinishedReason` | Meaning |
+|---|---|
+| `StopAbandoned` | The stop had budget left when called and had not returned when it expired. `StopErr` holds `ErrStopAbandoned`, and a later return does not overwrite it. |
+| `StopUnbudgeted` | The budget had already expired when this stop's turn came. It is still called, and not awaited. `StopErr` holds `ErrStopAbandoned`. |
+| `StopFailed` | The stop returned an error, or panicked, inside the budget. |
+| `SupervisorAbandoned` | The service's supervisor goroutine had not exited by the deadline. |
+
+`Complete()` is true when `Unfinished` is empty.
 
 ## Setters, and when they are safe to call
 
@@ -139,10 +216,14 @@ registration receiving signals nobody reads.
 | Symbol | Value | Meaning |
 |---|---|---|
 | `ErrShutdown` | `errors.NewSentinel("controls.shutdown", "controller shutdown")` | The cause attached to the controller context for every stop the controller drives. Test for it with `errors.Is(context.Cause(ctx), controls.ErrShutdown)`. |
-| `ErrRestartsExhausted` | `errors.NewSentinel("controls.restarts_exhausted", "max restarts exceeded")` | Inside the error a service leaves on `ServiceInfo.Error` and `Errors()`, and a child on `Failure.Err`, when it has used up its restart policy. `errors.Is` matches it and the last error beside it. |
+| `ErrRestartsExhausted` | `errors.NewSentinel("controls.restarts_exhausted", "max restarts exceeded")` | Inside the error a service leaves on `ServiceInfo.Error`, `Errors()` and its terminal `ServiceEvent`, and a child on `Failure.Err`, when it has used up its restart policy. `errors.Is` matches it and the last error beside it. |
+| `ErrStopAbandoned` | `errors.NewSentinel("controls.stop_abandoned", "stop not awaited within the shutdown budget")` | On `ServiceInfo.StopErr` for a stop abandoned at the deadline, or not awaited because the budget had gone. |
 | `DefaultShutdownTimeout` | `5 * time.Second` | Applied when `WithShutdownTimeout` is not passed. |
 | `DefaultRestartResetInterval` | `30 * time.Second` | Applied when `RestartPolicy.RestartResetInterval` is zero. |
 | `Stop` | `Message("stop")` | The only control message. |
+| `CauseStop`, `CauseSignal`, `CauseParent`, `CauseGaveUp`, `CauseCompleted` | `StopCause` values | What started a shutdown; the last two are reserved. |
+| `StopAbandoned`, `StopUnbudgeted`, `StopFailed`, `SupervisorAbandoned` | `UnfinishedReason` values | Why a shutdown step did not finish. |
+| `EventRetrying`, `EventFailed`, `EventUnableToStart` | `EventKind` values | The kinds of `ServiceEvent`. |
 | `NeverStarted`, `Running`, `UnableToStart`, `Stopping`, `Stopped` | `State` values | The lifecycle states, in order. |
 | `Unknown` | `State` value | Not part of that sequence: the state could not be determined. |
 

@@ -45,9 +45,10 @@ type RestartPolicy struct {
   one. `0` means unlimited.
 - **The controller keeps running either way.** Giving up on a service does not
   stop the process or the other services; the error is recorded on
-  `ServiceInfo.Error`, forwarded on the error channel and logged. If a dead
-  service should take the process down, watch the channel for
-  `errors.Is(err, controls.ErrRestartsExhausted)` and call `Stop()` yourself.
+  `ServiceInfo.Error`, logged, and delivered as a terminal `ServiceEvent` to a
+  `WithOnEvent` callback and on the error channel. If a dead service should take
+  the process down, react to `EventFailed` or `EventUnableToStart` in the
+  callback and call `Stop()` yourself.
 - **But readiness goes false if the service never started at all.** Giving up on
   a service that never once started cleanly means it never will, so the
   controller moves to `UnableToStart` and reports unready. An orchestrator then

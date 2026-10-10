@@ -44,11 +44,9 @@ type Controller struct {
 	logger   *slog.Logger
 	messages chan Message
 	errs     chan error
-	// ownErrs is the error channel NewController made. The error handler
-	// reads and logs from it because nothing else will; a channel a consumer
-	// installed with SetErrorsChannel is the consumer's to drain, and the
-	// handler must not compete for it, or the consumer sees only a share of
-	// what was forwarded (issue 14).
+	// ownErrs is the error channel NewController made. The controller closes
+	// it when done; a channel installed with SetErrorsChannel is the
+	// consumer's and is never closed here (spec 0008 D9).
 	ownErrs         chan error
 	signals         chan os.Signal
 	wg              *sync.WaitGroup
@@ -59,9 +57,26 @@ type Controller struct {
 	healthChecks    map[string]*healthCheckEntry
 	validError      ValidErrorFunc
 	// shutdownComplete is closed once handleStopMessage has finished the full
-	// shutdown sequence. The error/context and signal handler goroutines watch
+	// shutdown sequence. The parent watch and signal handler goroutines watch
 	// it as their exit condition so they terminate rather than spin or leak.
 	shutdownComplete chan struct{}
+
+	// Under stateMutex, set with the transition that starts shutdown (spec
+	// 0008 D1, D3).
+	deadline       time.Time
+	outcome        Outcome
+	outcomeWritten bool
+
+	onEvent func(ServiceEvent)
+
+	// subMu orders subscribing to the error channel against shutdown's cutoff,
+	// after which no forwarder can start (spec 0008 D9).
+	subMu       sync.Mutex
+	subscribed  bool
+	subStarted  bool
+	subFinished bool
+	errsFwd     *forwarder
+	eventsFwd   *forwarder
 }
 
 func (c *Controller) GetContext() context.Context {
@@ -91,10 +106,29 @@ func (c *Controller) SetSignalsChannel(signals chan os.Signal) {
 	c.signals = signals
 }
 
+// Errors returns the error channel, which receives the error of every terminal
+// service failure and of the latest of each run of retries. Calling it
+// subscribes, so failures before the first call are not delivered; read it
+// until it closes, and never send on it.
 func (c *Controller) Errors() chan error {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+
+	if !c.subFinished && !c.subscribed {
+		c.subscribed = true
+
+		if c.subStarted && c.errsFwd == nil {
+			c.startErrorsForwarder()
+		}
+	}
+
 	return c.errs
 }
 
+// SetErrorsChannel installs a channel of the consumer's own in place of the
+// controller's. Like every Configurable setter it must be called before Start.
+// The controller never closes it, and sends nothing on it after Done; read it
+// until Done, then take what is still buffered.
 func (c *Controller) SetErrorsChannel(errs chan error) {
 	c.errs = errs
 }
@@ -226,14 +260,48 @@ func (c *Controller) markUnableToStart(name string, err error) {
 }
 
 // beginShutdown transitions into Stopping from any state a shutdown may start
-// from, and reports whether this caller made the transition.
+// from and, in the same critical section, records the cause and the deadline.
+// It reports whether this caller made the transition, so exactly one trigger's
+// cause is recorded however many race (spec 0008 D1).
 //
-// UnableToStart is one of them, and forgetting it would be quiet and bad: Stop
-// would refuse, and the services that ARE running would never be told to stop
-// (D8). The controller reports unready in that state but it is still a live
-// process holding whatever its working services hold.
-func (c *Controller) beginShutdown() bool {
-	return c.compareAndSetState(Running, Stopping) || c.compareAndSetState(UnableToStart, Stopping)
+// UnableToStart is one of those states, and forgetting it would be quiet and
+// bad: Stop would refuse, and the services that ARE running would never be told
+// to stop (D8). The controller reports unready in that state but it is still a
+// live process holding whatever its working services hold.
+func (c *Controller) beginShutdown(cause StopCause, err error, sig os.Signal) bool {
+	c.stateMutex.Lock()
+	defer c.stateMutex.Unlock()
+
+	if !c.enterStoppingLocked() {
+		return false
+	}
+
+	c.recordCause(cause, err, sig)
+
+	return true
+}
+
+// enterStoppingLocked moves Running or UnableToStart to Stopping. Callers hold
+// stateMutex.
+func (c *Controller) enterStoppingLocked() bool {
+	if c.state != Running && c.state != UnableToStart {
+		return false
+	}
+
+	c.state = Stopping
+
+	return true
+}
+
+// recordCause records the first cause and the deadline it starts. Callers hold
+// stateMutex.
+func (c *Controller) recordCause(cause StopCause, err error, sig os.Signal) {
+	if c.outcome.Cause != "" {
+		return
+	}
+
+	c.outcome.Cause, c.outcome.Err, c.outcome.Signal = cause, err, sig
+	c.deadline = time.Now().Add(c.shutdownTimeout)
 }
 
 // compareAndSetState atomically checks if the current state matches expected,
@@ -271,6 +339,9 @@ func (c *Controller) Start() {
 	// run can be classified.
 	c.services.validError = c.validError
 	c.services.onUnableToStart = c.markUnableToStart
+	c.services.publish = c.publish
+
+	c.startForwarders()
 
 	// Snapshot the service count under the services mutex so the wait-group add
 	// matches exactly the goroutines services.start will spawn.
@@ -290,7 +361,7 @@ func (c *Controller) Start() {
 	// (startAsyncCheck writes entry.cancel) must therefore happen-before the
 	// goroutines that read them start, or the two accesses race when a shutdown
 	// lands mid-startup.
-	c.services.start(c.ctx, c.wg, c.errs, c.shutdownComplete)
+	c.services.start(c.ctx, c.wg)
 	c.startAsyncHealthChecks()
 
 	go c.controls()
@@ -298,18 +369,22 @@ func (c *Controller) Start() {
 	c.logger.Debug("All services should now be running")
 }
 
-// Wait blocks until every supervisor goroutine and the shutdown sequence have
-// finished. It is unbounded and REQUIRES context-respecting StartFuncs: a
-// StartFunc that never returns after cancellation pins its supervisor
-// goroutine, and Wait blocks forever — even though the controller itself has
-// completed shutdown and reports Stopped. When a service wraps third-party
-// code that may ignore cancellation, use WaitContext to bound the wait (D10).
+// Wait blocks until the shutdown sequence has finished, every async health
+// check has exited, and every service has either started cleanly or had its
+// supervisor goroutine exit. The shutdown sequence includes delivering queued
+// events, so Wait can return up to the shutdown budget later when a consumer is
+// slow.
+//
+// It is unbounded: a service whose Start fails and whose retry then ignores
+// cancellation keeps Wait blocked even though the controller reports Stopped.
+// Use Done and Outcome to decide an exit, or WaitContext to bound the wait
+// (D10).
 func (c *Controller) Wait() {
 	c.wg.Wait()
 }
 
-// WaitContext blocks until all supervisor goroutines have exited, or until ctx
-// is done, whichever comes first. It returns nil on a clean drain and ctx.Err()
+// WaitContext waits for what Wait waits for, or until ctx is done, whichever
+// comes first. It returns nil on a clean drain and ctx.Err()
 // when the wait is abandoned. On the abandon path the internal helper goroutine
 // (and any stuck supervisors pinning the wait group) are deliberately leaked —
 // the same abandon-at-deadline tradeoff the shutdown sequence applies to
@@ -331,28 +406,39 @@ func (c *Controller) WaitContext(ctx context.Context) error {
 }
 
 // Stop initiates a graceful shutdown. Duplicate calls while already
-// stopping or stopped are safely ignored.
+// stopping or stopped are safely ignored. It may be called from a WithOnEvent
+// callback.
 func (c *Controller) Stop() {
-	if !c.beginShutdown() {
+	if !c.stopFor(CauseStop, nil, nil) {
 		c.logger.Warn("Stop called, but not in expected state, unable to continue", "current_state", c.GetState())
+	}
+}
 
-		return
+// stopFor starts a shutdown for cause and hands it to the message processor,
+// reporting whether this caller started it.
+func (c *Controller) stopFor(cause StopCause, err error, sig os.Signal) bool {
+	if !c.beginShutdown(cause, err, sig) {
+		return false
 	}
 
-	// Guard the send against an already-completed shutdown (D9). If this caller
-	// won the CAS but was descheduled while a direct-channel Stop drove the full
-	// shutdown, the message processor has already exited and there is no receiver;
-	// an unguarded send on the unbuffered channel would block forever.
+	// If this caller won the transition but a Stop sent directly on Messages()
+	// reached the processor first, nothing will receive this send. Completion
+	// (D9) and the cancel only handleStopMessage makes both release it; the
+	// cancel comes early enough that a WithOnEvent callback here does not wait
+	// on its own drain (spec 0008 D1).
 	select {
 	case c.messages <- Stop:
 	case <-c.shutdownComplete:
+	case <-c.ctx.Done():
 	}
+
+	return true
 }
 
 // Controls sets the handlers for different control operations.
 func (c *Controller) controls() {
 	c.startSignalHandler()
-	c.startErrorAndContextHandler()
+	c.startParentWatch()
 	c.processControlMessages()
 }
 
@@ -374,7 +460,10 @@ func (c *Controller) startSignalHandler() {
 		select {
 		case sig := <-c.Signals():
 			c.logger.Warn("received signal", "signal", sig)
-			c.Stop()
+
+			if !c.stopFor(CauseSignal, nil, sig) {
+				c.logger.Warn("signal received, but not in expected state, unable to continue", "current_state", c.GetState())
+			}
 		case <-c.shutdownComplete:
 			// Shutdown was driven by some other path (context cancel, direct
 			// Stop). Exit rather than leak waiting for a signal that will never
@@ -393,87 +482,25 @@ func (c *Controller) startSignalHandler() {
 	}()
 }
 
-func (c *Controller) startErrorAndContextHandler() {
-	// Handle errors and context cancellation. Exits once shutdown is complete so
-	// it neither leaks nor busy-spins on a permanently-ready ctx.Done() case.
+func (c *Controller) startParentWatch() {
 	go func() {
 		// Watch the PARENT, not c.ctx. Since D3 severed the two, c.ctx is only
 		// cancelled by the shutdown sequence itself — watching it here would mean
-		// the handler could never be the thing that initiates a stop. The parent's
+		// this could never be the thing that initiates a stop. The parent's
 		// Done() closes on cancellation AND on deadline expiry, so both arrive here
 		// and both become a graceful, bounded Stop.
-		//
-		// Local copy of the done channel; set to nil after first receipt so the
-		// select case is disabled and stops firing on every iteration (the
-		// busy-spin fix, D4).
-		done := c.parent.Done()
-
-		// Only the controller's own channel is read here. A replaced one has
-		// a consumer, and reading it too would take errors from them.
-		errs := c.loggedErrors()
-
-		for {
-			select {
-			case err, ok := <-errs:
-				if !ok {
-					return // channel closed, controller stopped
-				}
-
-				if !errors.Is(err, context.Canceled) {
-					c.logger.Error("control error", "error", err)
-				}
-			case <-done:
-				done = nil // disable this case; ctx.Done() is now permanently ready
-
-				if !c.IsStopping() && !c.IsStopped() {
-					// Report the PARENT's cause: c.ctx has not been cancelled yet at
-					// this point (the Stop below is what cancels it), so reading its
-					// Err would log nil and lose the reason we are stopping.
-					c.logger.Debug("stopping due to parent context completion",
-						"error", context.Cause(c.parent))
-					c.Stop()
-				}
-			case <-c.shutdownComplete:
-				// Real exit condition: shutdown sequence finished. Drain any
-				// buffered errors without blocking, then return.
-				c.drainErrors()
-
-				return
+		select {
+		case <-c.parent.Done():
+			if !c.IsStopping() && !c.IsStopped() {
+				// Report the PARENT's cause: c.ctx has not been cancelled yet at
+				// this point (the stop below is what cancels it).
+				cause := context.Cause(c.parent)
+				c.logger.Debug("stopping due to parent context completion", "error", cause)
+				c.stopFor(CauseParent, cause, nil)
 			}
+		case <-c.shutdownComplete:
 		}
 	}()
-}
-
-// loggedErrors is the channel the controller logs from: its own, or nil (a
-// select case that never fires) once a consumer has replaced it.
-func (c *Controller) loggedErrors() chan error {
-	if c.errs != c.ownErrs {
-		return nil
-	}
-
-	return c.errs
-}
-
-// drainErrors empties the controller's own error channel without blocking,
-// logging any non-cancel errors. Used at handler shutdown so a buffered error
-// is not silently dropped. A replaced channel is left to its consumer.
-func (c *Controller) drainErrors() {
-	errs := c.loggedErrors()
-
-	for {
-		select {
-		case err, ok := <-errs:
-			if !ok {
-				return
-			}
-
-			if err != nil && !errors.Is(err, context.Canceled) {
-				c.logger.Error("control error", "error", err)
-			}
-		default:
-			return
-		}
-	}
 }
 
 func (c *Controller) processControlMessages() {
@@ -493,11 +520,8 @@ func (c *Controller) processControlMessages() {
 }
 
 func (c *Controller) handleStopMessage() {
-	// If still Running, transition to Stopping first (handles direct channel sends).
-	// If Stop() already transitioned us, this CAS is a harmless no-op.
-	c.beginShutdown()
-
-	if c.GetState() != Stopping {
+	deadline, ok := c.enterShutdownFromMessage()
+	if !ok {
 		return
 	}
 
@@ -513,11 +537,12 @@ func (c *Controller) handleStopMessage() {
 	// ctx.Done() are unblocked before the shutdown timeout fires.
 	c.cancel(ErrShutdown)
 
-	// Derive the shutdown timeout from a fresh background context.
-	// c.ctx is already cancelled above, so using it as a parent would
-	// produce a context that is dead on arrival — causing http.Server.Shutdown
-	// to fail immediately instead of draining in-flight connections.
-	ctx, cancel := context.WithTimeout(context.Background(), c.shutdownTimeout)
+	// The deadline was recorded at the trigger (spec 0008 D1), and derives from
+	// a fresh background context: c.ctx is already cancelled above, so using it
+	// as a parent would produce a context that is dead on arrival — causing
+	// http.Server.Shutdown to fail immediately instead of draining in-flight
+	// connections.
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 
 	// Cancel each async health-check context explicitly. Cancelling c.ctx above
@@ -527,7 +552,7 @@ func (c *Controller) handleStopMessage() {
 	// parent is collected.
 	c.cancelHealthChecks()
 
-	c.services.stop(ctx)
+	unfinished := c.services.stop(ctx)
 
 	// Bound the wait for supervisor exits with the remaining shutdown budget —
 	// one deadline covers the whole "bounded shutdown" contract (D10). A
@@ -539,16 +564,47 @@ func (c *Controller) handleStopMessage() {
 			"service StartFunc did not return before the shutdown deadline; abandoning its supervisor goroutine",
 			"service_name", name,
 		)
+
+		unfinished = append(unfinished, Unfinished{Service: name, Reason: SupervisorAbandoned})
 	}
 
-	c.SetState(Stopped)
+	forwarders := c.cutOffSubscriptions()
+
+	c.stateMutex.Lock()
+	c.outcome.Unfinished = unfinished
+	c.outcomeWritten = true
+	c.state = Stopped
+	c.stateMutex.Unlock()
+
 	c.logger.Info("Stopped")
 
-	// Signal the handler goroutines (error/context, signal, message processor)
-	// that the shutdown sequence is complete so they terminate.
+	c.drain(ctx, forwarders)
+
+	// Signal the handler goroutines (context, signal, message processor) that
+	// the shutdown sequence is complete so they terminate.
 	close(c.shutdownComplete)
 
 	c.wg.Done()
+}
+
+// enterShutdownFromMessage makes the transition for a Stop sent directly on
+// Messages(), and records CauseStop and a deadline if nothing has: that covers
+// the direct send and a consumer that SetState(Stopping) first, which no
+// transition saw (spec 0003 D7). It reports the deadline, and false when the
+// controller is not Stopping.
+func (c *Controller) enterShutdownFromMessage() (time.Time, bool) {
+	c.stateMutex.Lock()
+	defer c.stateMutex.Unlock()
+
+	c.enterStoppingLocked()
+
+	if c.state != Stopping {
+		return time.Time{}, false
+	}
+
+	c.recordCause(CauseStop, nil, nil)
+
+	return c.deadline, true
 }
 
 // startAsyncHealthChecks launches background goroutines for health checks
@@ -774,6 +830,159 @@ func (c *Controller) setValidError(fn ValidErrorFunc) {
 	c.validError = fn
 }
 
+// publish is how a supervisor reports a failure: logged here, at the source,
+// then queued for each consumer without blocking. Nothing reads a channel to
+// log, so nothing competes with a consumer for it (spec 0008 D7, issue 19).
+func (c *Controller) publish(index int, ev ServiceEvent) {
+	c.logger.Error(failureMessage(ev.Kind),
+		"service_name", ev.Service, "kind", ev.Kind, "restarts", ev.Restarts, "error", ev.Err)
+
+	c.subMu.Lock()
+	fwds := c.activeForwarders()
+	c.subMu.Unlock()
+
+	for _, f := range fwds {
+		f.enqueue(index, ev)
+	}
+}
+
+// activeForwarders lists the forwarders that exist, the channel's first so it
+// gets the drain budget first. Callers hold subMu.
+func (c *Controller) activeForwarders() []*forwarder {
+	var fwds []*forwarder
+
+	for _, f := range []*forwarder{c.errsFwd, c.eventsFwd} {
+		if f != nil {
+			fwds = append(fwds, f)
+		}
+	}
+
+	return fwds
+}
+
+func failureMessage(kind EventKind) string {
+	switch kind {
+	case EventRetrying:
+		return "service failed; restarting"
+	case EventFailed:
+		return "service failed; restarts exhausted"
+	default:
+		return "service unable to start"
+	}
+}
+
+// startForwarders starts the callback's forwarder and, for a subscribed or
+// installed channel, the channel's (spec 0008 D8, D9).
+func (c *Controller) startForwarders() {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+
+	c.subStarted = true
+
+	if c.onEvent != nil {
+		c.eventsFwd = newForwarder(&forwarder{
+			consumer: "WithOnEvent",
+			deliver: func(ev ServiceEvent, _ <-chan struct{}) bool {
+				c.invokeOnEvent(ev)
+
+				return true
+			},
+		})
+	}
+
+	if c.subscribed || c.errs != c.ownErrs {
+		c.startErrorsForwarder()
+	}
+}
+
+// startErrorsForwarder starts the forwarder for whichever channel the controller
+// holds. It is that channel's only sender, so for the controller's own channel
+// it is also the only goroutine that may close it. Callers hold subMu.
+func (c *Controller) startErrorsForwarder() {
+	out := c.errs
+	if out == nil {
+		return
+	}
+
+	var onExit func()
+	if out == c.ownErrs {
+		onExit = func() { close(out) }
+	}
+
+	c.errsFwd = newForwarder(&forwarder{
+		consumer:          "Errors",
+		awaitAfterAbandon: true,
+		deliver: func(ev ServiceEvent, abandon <-chan struct{}) bool {
+			select {
+			case out <- ev.Err:
+				return true
+			case <-abandon:
+				return false
+			}
+		},
+		onExit: onExit,
+	})
+}
+
+// invokeOnEvent recovers a panicking callback, which has still had its event,
+// so the next one is delivered.
+func (c *Controller) invokeOnEvent(ev ServiceEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Error("WithOnEvent callback panicked", "service_name", ev.Service, "kind", ev.Kind, "panic", r)
+		}
+	}()
+
+	c.onEvent(ev)
+}
+
+// cutOffSubscriptions refuses further events and subscriptions, and closes the
+// controller's own channel when no forwarder sends on it. It returns the
+// forwarders still to drain.
+func (c *Controller) cutOffSubscriptions() []*forwarder {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+
+	c.subFinished = true
+
+	if c.ownErrs != nil && (c.errsFwd == nil || c.errs != c.ownErrs) {
+		close(c.ownErrs)
+	}
+
+	fwds := c.activeForwarders()
+	for _, f := range fwds {
+		f.closeAdmission()
+	}
+
+	return fwds
+}
+
+// drain waits for each forwarder to empty its queue within the remaining
+// budget, then abandons what is left. A forwarder that honours abandonment is
+// still waited for, so nothing is sent after Done (spec 0008 D8).
+func (c *Controller) drain(ctx context.Context, fwds []*forwarder) {
+	for _, f := range fwds {
+		select {
+		case <-f.exited:
+			continue
+		case <-ctx.Done():
+		}
+
+		left := f.abandonDelivery()
+
+		if f.awaitAfterAbandon {
+			<-f.exited
+
+			left += f.dropped
+		}
+
+		if left > 0 {
+			c.logger.Warn("events undelivered at the shutdown deadline",
+				"consumer", f.consumer, "count", left)
+		}
+	}
+}
+
 // NewController creates a Controller with the given context and options.
 //
 // It does NOT install an OS signal handler. Signal disposition is process-global
@@ -785,7 +994,7 @@ func (c *Controller) setValidError(fn ValidErrorFunc) {
 // observes ErrShutdown as its context cause. See docs/how-to/graceful-shutdown.md.
 func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 	// Sever cancellation from the caller's context, keeping its values (D3).
-	// The parent's completion still stops the services — startErrorAndContextHandler
+	// The parent's completion still stops the services — startParentWatch
 	// watches it and drives a graceful Stop — but it does so THROUGH the shutdown
 	// sequence, so the cause every service observes is ErrShutdown rather than
 	// whatever the parent happened to carry. Deriving directly from the parent

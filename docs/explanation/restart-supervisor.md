@@ -101,18 +101,23 @@ When the counter does reach `MaxRestarts`, the supervisor gives up: it records a
 `ErrRestartsExhausted` and against the last real error, and stops supervising
 that service. A `Supervisor`'s child leaves the same sentinel on its `Failure`.
 
-## The error channel contract
+## How a failure is reported
 
-The supervisor forwards errors on the controller's error channel, where the
-error-and-context handler logs them. Two rules keep that channel well-behaved:
+The supervisor logs a failure where it happens, then queues a `ServiceEvent` for
+each consumer: `EventRetrying` when the policy will run the service again,
+`EventFailed` or `EventUnableToStart` when it will not. Three rules keep that
+well-behaved:
 
-- **It never sends `nil`.** A health-threshold breach records its error via the
-  service's `ServiceInfo` rather than the channel, and a wrapped-`nil` is never
-  forwarded, so a receiver never has to guard against a spurious `nil` error.
-- **Every send is non-blocking against shutdown.** Each forward is guarded by a
-  `select` on the shutdown-complete signal, so once the handler has exited there
-  is no way for a late error to block the supervisor forever. This is the D9
-  property discussed in [Concurrency and shutdown correctness](concurrency.md).
+- **It never blocks.** Queueing never waits on a consumer; a forwarder goroutine
+  per consumer does the delivering, so a slow reader of the error channel cannot
+  hold a restart back. This is the D9 property discussed in
+  [Concurrency and shutdown correctness](concurrency.md).
+- **It never carries `nil`.** A health-threshold breach is reported with its
+  health error, `health check failed: …`, and is not counted as the run's error,
+  so a health-driven exhaustion is still the bare sentinel.
+- **Shutdown is not a failure.** A failure noticed after shutdown has cancelled
+  the services' context, including a health breach landing during a `Status`
+  call, is not reported.
 
 ## What a restart shares, and what it must not
 

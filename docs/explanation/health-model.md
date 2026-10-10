@@ -104,8 +104,8 @@ correctly, destroying the in-flight requests the drain existed to protect.
 
 The same rule covers `NeverStarted` (nothing is serving yet) and `UnableToStart`
 (a registered service has proven it will never start, so the process cannot do
-its job). In the latter case nothing is stopped and the error still reaches the
-error channel: the controller reports unready and leaves the decision to whoever
+its job). In the latter case nothing is stopped and the failure is still
+reported, as an `EventUnableToStart`: the controller reports unready and leaves the decision to whoever
 is watching. See wiki spec
 [0003](https://gitlab.com/phpboyscout/go/controls/-/wikis/specs/0003-the-lifecycle-state-should-reach-the-health-reports).
 

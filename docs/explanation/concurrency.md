@@ -27,19 +27,18 @@ and an explicit `Stop` can all arrive at once.
 
 ## Goroutine termination: no leak, no busy-spin
 
-Every long-lived goroutine the controller starts (the signal handler, the error
-and context handler, the message processor, and each service supervisor) shares
-a single exit condition: a `shutdownComplete` channel that the shutdown handler
-closes once the sequence finishes. Each goroutine `select`s on it and returns
-when it closes. Nothing is left blocked on a channel that will never receive.
+Every long-lived goroutine the controller starts (the signal handler, the parent
+watch, the message processor, and each service supervisor) shares a single exit
+condition: a `shutdownComplete` channel that the shutdown handler closes once the
+sequence finishes, and that `Done()` returns. Each goroutine `select`s on it and
+returns when it closes. Nothing is left blocked on a channel that will never
+receive.
 
-The error-and-context handler needs one extra piece of care. It watches
-`ctx.Done()`, but a closed `Done()` channel is *permanently* ready, so a
-`select` that keeps a `case <-ctx.Done()` would fire on every iteration and spin
-the CPU. The handler defuses this by setting its local copy of the done channel
-to `nil` after the first receipt, which disables that `select` case for good.
-The goroutine then idles until `shutdownComplete` closes, draining any buffered
-errors before it exits.
+The parent watch needs one extra piece of care. It watches the parent's
+`Done()`, and a closed `Done()` channel is *permanently* ready, so a loop that
+kept selecting on it would fire on every iteration and spin the CPU. The watch
+therefore selects once, on the parent or on `shutdownComplete`, and returns
+after either.
 
 A spin is CPU, not a goroutine count, and the first test written for this could
 not see one: a handler that spins and then exits at shutdown leaves the goroutine
@@ -51,8 +50,17 @@ defect reinstated it reports a whole core; without it, near zero.
 
 `Wait` blocks on a wait group sized to *services + async health checks + 1*. The
 extra "+1" is the controller's own lifecycle count, released **last**, only
-after the shutdown handler has run every stop callback and set the `Stopped`
-state. So `Wait` returning is a hard guarantee that shutdown finished.
+after the shutdown handler has run every stop callback, set the `Stopped` state
+and delivered the queued failure events (below). So `Wait` returning is a hard
+guarantee that shutdown finished. A service's count is released when it first
+starts cleanly or when its supervisor exits, whichever is first, so `Wait` also
+waits on a service whose `Start` failed and whose retry hangs.
+
+`Done()` is the bounded way to wait. It closes at the end of the same sequence,
+which runs under **one deadline recorded when shutdown is triggered**: `Stop`, a
+signal or the parent context, not the moment the message processor gets to it.
+So `<-c.Done()` returns within the shutdown timeout of the trigger, and
+`Outcome()` then says what triggered it and which steps did not finish.
 
 That guarantee holds even if a `WithStop` misbehaves. Each stop runs in its own
 goroutine and is awaited against the shutdown-timeout deadline; a stop that
@@ -113,27 +121,42 @@ checks **before** it launches the control goroutines. The write of each
 `CancelFunc` happens-before any goroutine that might read it, closing the race
 by construction.
 
-## D9: error forwards are select-guarded on shutdown completion
+## D9: a failure is never sent from a supervisor
 
-A service supervisor forwards genuine errors on the error channel, whose only
-receiver is the error-and-context handler. But that handler exits when
-`shutdownComplete` closes. If a supervisor tried to forward an error *after* the
-handler had gone, an unguarded send on an unbuffered channel would block the
-supervisor forever.
+A supervisor that sees a service fail logs it, at `ERROR` with the service and
+the kind of failure, then appends it to a queue for each consumer: the
+`WithOnEvent` callback, and the error channel once something has subscribed by
+calling `Errors()` (or installed a channel with `SetErrorsChannel`). Appending
+never blocks, so nothing a consumer does or fails to do can hold a supervisor
+back. Each queue has one **forwarder**, a goroutine that is the only thing
+delivering to that consumer. A retry still waiting in a queue is replaced by a
+newer retry of the same service, so a queue holds at most two events per
+service; a terminal failure is never replaced or dropped.
 
-Every forward is therefore a two-way `select`: send on the error channel, **or**
-observe `shutdownComplete`. Once shutdown has completed there is no receiver, so
-the `shutdownComplete` case wins and the send is abandoned. This makes every
-error forward provably non-blocking, so a late error can never wedge a supervisor
-goroutine during teardown.
+Nothing in the controller reads the error channel. Before v0.8 it did, to log
+what arrived, and a consumer reading the same channel received only a share of
+the errors (issue 19).
 
-`Stop()` is a second sender covered by the same guard. After winning the
-`Running → Stopping` CAS it sends a `Stop` control message to the message
-processor. But if the caller is descheduled after the CAS while a direct-channel
-`Stop` drives the whole shutdown, the processor exits before the send lands, and
-an unguarded send on the unbuffered message channel would block forever.
-`Stop()` therefore selects between the message send and `shutdownComplete`, so a
-`Stop` racing a completing shutdown returns promptly instead of hanging.
+At shutdown, once every supervisor has exited or been abandoned, the queues
+refuse anything further, and no new subscription is accepted. The forwarders
+then deliver what is left **within the remaining budget**, and `Done` closes
+after that. A consumer that stops taking events therefore holds `Done` back by
+up to the remaining budget, but no longer. At the deadline, delivery is
+abandoned, and the undelivered count is logged. The error channel's forwarder
+selects on that abandonment in its send, and shutdown waits for it to exit
+before closing `Done`, so nothing is sent on the channel after `Done`. The
+controller's own channel is closed by its forwarder as it exits, or at the
+cutoff if it has none, so a reader ranging over it always ends. A callback
+cannot be interrupted: one in progress at the deadline may outlive `Done`.
+
+`Stop()` sends a `Stop` control message to the message processor after winning
+the `Running → Stopping` CAS. If a `Stop` sent directly on the message channel
+reached the processor first, nothing receives that send. `Stop()` therefore
+selects on the send, on `shutdownComplete`, **and on the services' context**,
+which only the shutdown sequence cancels, so it returns as soon as that
+shutdown is under way. That matters for a `WithOnEvent` callback calling
+`Stop()`, which would otherwise wait on `Done` while `Done` waits on the
+callback.
 
 ## D11: the health-check timeout is raced, and stale async caches fail closed
 
@@ -180,6 +203,13 @@ The stop sequence therefore **snapshots the service slice under the lock and
 releases it** before running any `WithStop`. Registration is already impossible
 once the controller is `Stopping`, so the snapshot cannot go stale, and the
 health probes stay responsive throughout shutdown.
+
+The reverse holds too. `status()`, `liveness()` and `readiness()` copy the slice
+under the lock and call each probe after releasing it, so a probe that blocks
+cannot hold the stop sequence before it reaches its deadline, which a load
+balancer polling `/readyz` would otherwise make likely. Two reports built at
+once may therefore call the same probe concurrently, so a probe must be safe to
+call concurrently with itself.
 
 ## Who owns the signal handler
 

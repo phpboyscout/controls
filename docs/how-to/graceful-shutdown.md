@@ -140,6 +140,41 @@ On the abandon path the stuck supervisor goroutine is deliberately leaked, the
 same trade as an abandoned stop. See
 [D10 in Concurrency and shutdown correctness](../explanation/concurrency.md).
 
+## Decide an exit code from the outcome
+
+`Done()` closes when the shutdown sequence has finished, within the shutdown
+timeout of whatever triggered it, and needs no deadline of your own. Then
+`Outcome()` says what triggered it and whether every step finished:
+
+```go
+c.Start()
+<-c.Done()
+
+o, _ := c.Outcome()
+
+switch {
+case !o.Complete():
+	for _, u := range o.Unfinished {
+		log.Printf("%s: %s %v", u.Service, u.Reason, u.Err)
+	}
+
+	os.Exit(1)
+case o.Cause == controls.CauseSignal:
+	os.Exit(128 + int(o.Signal.(syscall.Signal)))
+}
+```
+
+`Unfinished` lists each step in the order shutdown reached it: a stop that was
+abandoned at the deadline (`StopAbandoned`), one whose turn came after the
+budget had gone (`StopUnbudgeted`), one that returned an error or panicked
+(`StopFailed`), and a supervisor that had not exited (`SupervisorAbandoned`). A
+hung service usually appears twice, once for its stop and once for its
+supervisor. A stop that returns *because* the deadline fired may be reported
+either as `StopFailed` or as `StopAbandoned`; `Complete()` is false either way.
+
+`Outcome()` returns `ok == false` until the controller's own shutdown sequence
+has written it, so read it after `Done()`.
+
 ## Signal handling
 
 **The controller installs no signal handler by default.** Signal disposition is

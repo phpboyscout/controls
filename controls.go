@@ -160,9 +160,13 @@ type StopFunc func(context.Context)
 // which fails the health threshold, which restarts the service, which reports
 // the same stale failure — a service churning to restart exhaustion without one
 // log line naming the cause. See [StartFunc] on what a restart shares.
+//
+// It may be called concurrently with itself: health reports built at the same
+// time each call it, outside any lock the controller holds.
 type StatusFunc func() error
 
-// ProbeFunc is a health check function for liveness or readiness probes.
+// ProbeFunc is a health check function for liveness or readiness probes. It may
+// be called concurrently with itself.
 type ProbeFunc func() error
 
 // ValidErrorFunc determines whether an error from a service is expected
@@ -199,6 +203,11 @@ func WithStopErr(fn StopErrFunc) ServiceOption {
 }
 
 // WithStatus sets the service's health check function.
+//
+// Under a restart policy with a HealthFailureThreshold, a breach stops the
+// service before restarting it. That stop can still be running when shutdown
+// stops the same service; once shutdown has begun, only shutdown records
+// StopErr.
 func WithStatus(fn StatusFunc) ServiceOption {
 	return func(s *Service) {
 		s.Status = fn
