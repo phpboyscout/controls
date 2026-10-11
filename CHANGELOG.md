@@ -1,5 +1,101 @@
 # Changelog
 
+## [v0.8.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.7.1...v0.8.0)
+
+### Notes
+
+- Two opt-ins let a service's outcome stop the controller and name itself on Outcome:
+
+  - WithStopOnGiveUp stops the controller with CauseGaveUp when a service fails for good: it exhausts its restart
+    policy, its start fails with no policy, or it dies after a clean start. Outcome.Service names it and Outcome.Err
+    carries its error. A service with a Status and no restart policy is then polled for that death, by default every
+    10s with three failures in a row ending the process, which is how a go/transport HTTP or gRPC server that loses
+    its listener now stops it, 20 to 30 seconds after it dies. WithDeathWatch(interval, threshold) changes both.
+  - WithRunToCompletion declares that a service's Start returning nil means its work is done. The controller then stops
+    with CauseCompleted. Any error return, context.Canceled included, is a failure, under the restart policy if it has
+    one, and a completing service that fails for good stops the controller with CauseGaveUp, with or without
+    WithStopOnGiveUp. With several declared, WithCompletion(CompleteOnAll) waits for all of them; the default ends
+    on the first.
+
+  Under CauseGaveUp, Outcome.Err can be context.Canceled: decide on Outcome.Cause first.
+
+  Nothing changes in behaviour for a controller that sets none of these. Service gains an unexported field, so a
+  Service struct literal written positionally, without field names, no longer compiles; use field names.
+  EventFailed now also covers a service with no restart policy that died after starting cleanly.
+
+- A panic in a registered service's start function, in the Status probe a restart policy polls, or in a standalone
+  HealthCheck is now recovered instead of crashing the process. A panicking start is that service's failure, handled by
+  its restart policy like an error, so a service with no policy becomes UnableToStart. A polled Status panic is a health
+  breach at once, whatever the threshold; WithProbePanicsAsFailures makes it count as one failure instead. A panicking
+  HealthCheck reports unhealthy with "health check panicked: …", and so does a nil HealthCheck.Check, which crashed.
+
+  Every recovered panic, including those in stop callbacks, probes and Supervisor children that were already
+  recovered, now satisfies errors.Is(err, controls.ErrPanicked), and errors.OriginStack on it names the line that
+  panicked. Their messages are unchanged. A panic is never treated as a valid terminal error, so a ValidErrorFunc no
+  longer sees one, a child's included.
+
+  WithOnPanic (on the controller) and WithOnChildPanic (on a Supervisor) hand each recovered panic, with its raw value,
+  to a callback for an error tracker. The controller's runs from Start until shutdown's cutoff; while a callback is
+  busy, repeats at one site are merged into the latest with a count.
+
+  This changes a default: a service whose start panics no longer takes the process down with it. With no restart
+  policy it becomes UnableToStart and the process stays up, unready. A deployment that relied on the crash for a
+  restart sets WithStopOnGiveUp, and maps CauseGaveUp to a non-zero exit.
+
+  A restart policy exhausted by health breaches now ends with its last health error, "max restarts exceeded: health
+  check failed: …", where it was the bare "max restarts exceeded".
+
+- Adds `Outcome`, `Done` and `WithOnEvent`, and changes how `Errors()` behaves:
+
+  - The controller no longer reads the error channel. A consumer reading
+    Errors() gets every failure decided before shutdown and after its first
+    call, with a waiting retry replaced by a newer one, as long as it reads
+    until the channel closes. Calling Errors() subscribes: failures before
+    the first call are not delivered, so a consumer that must see a boot
+    failure calls it before Start or uses WithOnEvent. A reader that stops
+    early delays shutdown by up to the remaining budget whenever errors are
+    queued for it.
+  - The controller's own error channel is closed when it is done; a
+    receive after that returns nil, false. A channel installed with
+    SetErrorsChannel is not closed, nothing is sent on it after Done, and a
+    reader of a buffered one takes what is still buffered after Done.
+  - Wait and WaitContext can return later: shutdown now includes
+    delivering queued events, up to the remaining budget when a consumer is
+    slow.
+  - A WithOnEvent callback can run after Stopped, and one in progress at
+    the deadline can outlive Done.
+  - Supervisors no longer block on an undrained channel installed with
+    SetErrorsChannel; the forwarder holds the backlog instead.
+  - Sending on the channel Errors() returns now blocks, since nothing in
+    the controller reads it, and panics once it is closed.
+  - Health-breach retries now arrive on the error channel, where they were
+    absent.
+  - A consumer using SetErrorsChannel now gets the controller's logging
+    too, and may log each failure twice.
+  - The controller's failure log line changes from "control error" to one
+    naming the kind, with service_name and kind attributes.
+  - A health breach noticed after shutdown begins is no longer reported as
+    a retry or an exhaustion.
+  - Health probes are called outside the services mutex, so two reports
+    built at once may call a probe concurrently, and a slow probe no longer
+    blocks shutdown. A probe must be safe to call concurrently with itself.
+  - The shutdown budget starts when shutdown is triggered, not when the
+    stop message is processed.
+  - ServiceInfo.StopErr changes in three ways: it holds ErrStopAbandoned
+    for a stop abandoned at the deadline or never awaited because the
+    budget had gone, where it held nil; a stop that
+    returns after being abandoned no longer overwrites it; and a clean
+    shutdown stop now writes nil, clearing an error an earlier
+    health-triggered stop left there.
+
+### Features
+
+- let a service end the controller by giving up or finishing ([1972368](https://gitlab.com/phpboyscout/go/controls/-/commit/1972368700a5b655d69b2ef6e4a51edfeeb07ec6))
+- recover a panic in a service as that service's failure ([8666672](https://gitlab.com/phpboyscout/go/controls/-/commit/8666672f75903fccb178e615b069750f8ddd5f1b))
+- say why a controller stopped, and stop competing for its error channel ([3890cf4](https://gitlab.com/phpboyscout/go/controls/-/commit/3890cf4a794bcaf7b09dbf05931b9b120e1f9981))
+
 ## [v0.7.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.7.1)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.7.0...v0.7.1)
