@@ -50,6 +50,13 @@ a standalone `HealthCheck.Check` reports that check unhealthy with
 supervisor is recovered too, and its panic is a breach at once. See
 [What controls does not do](limitations.md#it-cannot-recover-a-panic-on-a-goroutine-your-callback-started).
 
+Who polls a `WithStatus` probe, besides a report: the restart supervisor, under
+a policy with a `HealthFailureThreshold`, and the death watch, under
+`WithStopOnGiveUp`, for a service with no policy. A `WithRunToCompletion`
+service is polled by neither once its work has finished, but its probes still
+count in the reports, so one that goes unhealthy once it is done makes the
+controller unready. See [Stop when a service gives up](../how-to/stop-on-give-up.md).
+
 ## Check types decide where a check appears
 
 A standalone `HealthCheck` carries a `CheckType` that routes it to the right

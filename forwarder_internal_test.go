@@ -202,7 +202,7 @@ func TestTheRecordedCauseIsTheWinners(t *testing.T) {
 
 		for _, cause := range causes {
 			wg.Go(func() {
-				if c.stopFor(cause, nil, nil) {
+				if c.stopFor(trigger{cause: cause}) {
 					mu.Lock()
 					winner = cause
 					mu.Unlock()

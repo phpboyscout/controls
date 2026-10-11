@@ -27,9 +27,8 @@ const (
 // terminal ServiceEvent for a service, on Failure.Err for a child. Test for it
 // with errors.Is; the service's last error is reachable the same way beside it.
 //
-// Nothing is stopped on its account (spec 0006 D4). A consumer that wants the
-// process to end when a service will not come back reacts to a terminal
-// ServiceEvent (WithOnEvent) and calls Stop.
+// Nothing is stopped on its account (spec 0006 D4) unless WithStopOnGiveUp is
+// set, or the service was declared WithRunToCompletion.
 var ErrRestartsExhausted = errors.NewSentinel("controls.restarts_exhausted", "max restarts exceeded")
 
 // runOutcome classifies the result of a single service run for the supervisor.
@@ -39,6 +38,7 @@ const (
 	// outcomeCleanStart means Start returned nil — the service either completed
 	// cleanly or, more commonly, serves in a background goroutine. It is NOT an
 	// exit and is never restarted; such services are supervised via health checks.
+	// For a WithRunToCompletion service it is completion (spec 0010 D6).
 	outcomeCleanStart runOutcome = iota
 	// outcomeCancelled means the run ended because the controller context was
 	// cancelled (graceful shutdown). It never triggers a restart.
@@ -73,6 +73,14 @@ type Services struct {
 	// reporterFor makes the panic reporter for a registration index and site.
 	// Wired at construction, nil without WithOnPanic (spec 0009 D11).
 	reporterFor func(reporter any, name string, site PanicSite) panicReporter
+	// stopOnGiveUp, deathWatch and completeOnAll are spec 0010's policy, and
+	// endFor its one way to stop the controller. Set by the controller at Start.
+	stopOnGiveUp  bool
+	deathWatch    deathWatch
+	completeOnAll bool
+	endFor        func(cause StopCause, err error, service string)
+	// outstanding counts declared services yet to complete, for CompleteOnAll.
+	outstanding atomic.Int32
 	// onUnableToStart is called when a service has failed without ever starting
 	// cleanly and has exhausted its restart policy, so it will never start. Set
 	// by the controller at Start, alongside validError.
@@ -232,6 +240,18 @@ func (q *Services) start(ctx context.Context, wg *sync.WaitGroup) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	// Counted before any supervisor runs, so an immediate completion cannot
+	// see zero (spec 0010 D10).
+	var declared int32
+
+	for _, s := range q.services {
+		if s.runToCompletion {
+			declared++
+		}
+	}
+
+	q.outstanding.Store(declared)
+
 	for index, s := range q.services {
 		exited := make(chan struct{})
 		q.exits = append(q.exits, supervisorExit{name: s.Name, exited: exited})
@@ -298,7 +318,10 @@ func (q *Services) supervise(ctx context.Context, index int, srv Service, wg *sy
 	updateInfo := func(update func(*ServiceInfo)) { q.mutateInfo(srv.Name, update) }
 
 	if srv.RestartPolicy == nil {
-		q.runOnce(ctx, index, srv, updateInfo)
+		if q.runOnce(ctx, index, srv, updateInfo) {
+			markStarted()
+			q.watchForDeath(ctx, index, srv, updateInfo)
+		}
 
 		return
 	}
@@ -319,7 +342,9 @@ func (q *Services) callStart(ctx context.Context, index int, srv Service) (err e
 	return srv.Start(ctx)
 }
 
-func (q *Services) runOnce(ctx context.Context, index int, srv Service, updateInfo func(func(*ServiceInfo))) {
+// runOnce runs a service with no restart policy, and reports whether it
+// started cleanly in the background.
+func (q *Services) runOnce(ctx context.Context, index int, srv Service, updateInfo func(func(*ServiceInfo))) bool {
 	updateInfo(func(i *ServiceInfo) { i.LastStarted = time.Now() })
 
 	err := q.callStart(ctx, index, srv)
@@ -331,7 +356,18 @@ func (q *Services) runOnce(ctx context.Context, index int, srv Service, updateIn
 
 	// Only forward genuine errors; a clean start, a cancellation, or a valid
 	// terminal error (e.g. http.ErrServerClosed) is not a failure.
-	if q.classifyRun(ctx, err) == outcomeError {
+	switch q.outcomeOf(ctx, srv, err) {
+	case outcomeCleanStart:
+		if srv.runToCompletion {
+			q.complete(srv)
+
+			return false
+		}
+
+		return true
+	case outcomeCancelled:
+		return false
+	case outcomeError:
 		// A service with no restart policy has no retries, so its first genuine
 		// error is already exhaustion, and it never started cleanly (that would
 		// have classified as outcomeCleanStart). Both halves of D4 hold here on
@@ -341,7 +377,96 @@ func (q *Services) runOnce(ctx context.Context, index int, srv Service, updateIn
 			q.onUnableToStart(srv.Name, err)
 		}
 
-		q.publish(index, ServiceEvent{Service: srv.Name, Kind: EventUnableToStart, Err: err})
+		q.terminal(index, srv, ServiceEvent{Service: srv.Name, Kind: EventUnableToStart, Err: err})
+	}
+
+	return false
+}
+
+// outcomeOf classifies a run, by completionOutcome for a declared service.
+func (q *Services) outcomeOf(ctx context.Context, srv Service, err error) runOutcome {
+	if srv.runToCompletion {
+		return completionOutcome(ctx, err)
+	}
+
+	return q.classifyRun(ctx, err)
+}
+
+// completionOutcome classifies a declared service's run: only nil with the
+// context live is completion, and every other return then is a failure, a
+// cancellation and a valid error included (spec 0010 D6).
+func completionOutcome(ctx context.Context, err error) runOutcome {
+	switch {
+	case ctx.Err() != nil:
+		return outcomeCancelled
+	case err == nil:
+		return outcomeCleanStart
+	default:
+		return outcomeError
+	}
+}
+
+// terminal publishes a terminal failure and then, under the give-up policy,
+// stops the controller. Every terminal path goes through it (spec 0010 D11),
+// and publishing first admits the event before shutdown's cutoff (D2).
+func (q *Services) terminal(index int, srv Service, ev ServiceEvent) {
+	q.publish(index, ev)
+
+	if q.stopOnGiveUp || srv.runToCompletion {
+		q.endFor(CauseGaveUp, ev.Err, srv.Name)
+	}
+}
+
+// complete stops the controller for a declared service's completion, or under
+// CompleteOnAll for the last one outstanding.
+func (q *Services) complete(srv Service) {
+	if q.completeOnAll && q.outstanding.Add(-1) > 0 {
+		return
+	}
+
+	q.endFor(CauseCompleted, nil, srv.Name)
+}
+
+// watchForDeath polls the Status of a no-policy service that started cleanly,
+// under WithStopOnGiveUp, and gives it up after the threshold. It never stops
+// the service: nothing restarts it, and shutdown follows (spec 0010 D4).
+func (q *Services) watchForDeath(ctx context.Context, index int, srv Service, updateInfo func(func(*ServiceInfo))) {
+	if !q.stopOnGiveUp || srv.Status == nil {
+		return
+	}
+
+	failures := 0
+
+	for {
+		select {
+		case <-time.After(q.deathWatch.interval):
+		case <-ctx.Done():
+			return
+		}
+
+		err := callProbe(srv.Status, q.reporter(index, srv.Name, SiteProbe))
+		if err == nil {
+			failures = 0
+
+			continue
+		}
+
+		failures++
+		if failures < q.deathWatch.threshold && !q.breachesAtOnce(err) {
+			continue
+		}
+
+		// A death noticed after the cancel is shutdown (spec 0008 D6).
+		if ctx.Err() != nil {
+			return
+		}
+
+		healthErr := errors.Wrap(err, "health check failed")
+
+		updateInfo(func(i *ServiceInfo) { i.Error = healthErr })
+		q.terminal(index, srv, ServiceEvent{Service: srv.Name, Kind: EventFailed, Err: healthErr})
+
+		return
 	}
 }
 
@@ -369,7 +494,7 @@ func (q *Services) reportExhausted(index int, srv Service, err error, cleanStart
 		}
 	}
 
-	q.publish(index, ServiceEvent{Service: srv.Name, Kind: kind, Err: finalErr, Restarts: restarts})
+	q.terminal(index, srv, ServiceEvent{Service: srv.Name, Kind: kind, Err: finalErr, Restarts: restarts})
 }
 
 // exhausted is the terminal error of a unit that used up its restart policy.
@@ -454,11 +579,18 @@ func (q *Services) runOnceWithRestart(ctx context.Context, index int, srv Servic
 		i.Error = err
 	})
 
-	switch q.classifyRun(ctx, err) {
+	switch q.outcomeOf(ctx, srv, err) {
 	case outcomeCancelled:
 		// Graceful shutdown (or an expected terminal error). Never restart.
 		return err, nil, false
 	case outcomeCleanStart:
+		// Finished work has nothing left to monitor.
+		if srv.runToCompletion {
+			q.complete(srv)
+
+			return err, nil, false
+		}
+
 		// Start returned nil: the service serves in the background. Mark it
 		// started and supervise it via its health check. monitorHealth blocks
 		// until the context is cancelled (shutdown) or the health threshold is
@@ -804,4 +936,6 @@ type Service struct {
 	Liveness      ProbeFunc
 	Readiness     ProbeFunc
 	RestartPolicy *RestartPolicy
+
+	runToCompletion bool
 }

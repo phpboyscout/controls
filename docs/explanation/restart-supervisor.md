@@ -123,6 +123,18 @@ well-behaved:
   the services' context, including a health breach landing during a `Status`
   call, is not reported.
 
+## When a service ends the controller
+
+Nothing a service does stops the controller unless the consumer opts in.
+`WithStopOnGiveUp` stops it when a terminal event is published, right after the
+event, so every consumer's queue has it before shutdown's cutoff. It also
+extends supervision to a service with a `Status` and no policy, which otherwise
+ends at its clean start: the supervisor polls the `Status` and publishes
+`EventFailed` after `WithDeathWatch`'s threshold, without calling the service's
+stop. `WithRunToCompletion` reads a `nil` return as finished work rather than a
+background start, so the supervisor ends there instead of entering health
+monitoring. See [Stop when a service gives up](../how-to/stop-on-give-up.md).
+
 ## What a restart shares, and what it must not
 
 A restart calls your `WithStart` function again. It does not rebuild your

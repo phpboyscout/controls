@@ -161,8 +161,16 @@ case !o.Complete():
 	os.Exit(1)
 case o.Cause == controls.CauseSignal:
 	os.Exit(128 + int(o.Signal.(syscall.Signal)))
+case o.Cause == controls.CauseGaveUp:
+	log.Printf("%s gave up: %v", o.Service, o.Err)
+	os.Exit(1)
 }
 ```
+
+`CauseGaveUp` and `CauseCompleted` come only from the opt-ins in
+[Stop when a service gives up](stop-on-give-up.md); `Outcome.Service` names the
+service. Decide on `Cause` before reading `Err`, which under `CauseGaveUp` can be
+`context.Canceled`.
 
 `Unfinished` lists each step in the order shutdown reached it: a stop that was
 abandoned at the deadline (`StopAbandoned`), one whose turn came after the

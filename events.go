@@ -11,7 +11,7 @@ const (
 	// EventRetrying is a failed run that the restart policy will run again.
 	EventRetrying EventKind = "retrying"
 	// EventFailed is terminal: the service started cleanly at least once, then
-	// failed and exhausted its policy.
+	// failed and exhausted its policy, or had none.
 	EventFailed EventKind = "failed"
 	// EventUnableToStart is terminal: the service never started cleanly and will
 	// not be tried again. It is the per-service half of the UnableToStart state.

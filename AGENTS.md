@@ -216,6 +216,10 @@ order. `Supervisor` manages a set that **changes**, stopped concurrently. Spec 0
 must therefore **never** fail because a child failed — a Supervisor is registered with a Controller,
 so one dead child would otherwise take the process out of rotation through that registration. A
 failed child is reported as `CheckDegraded` and delivered to the consumer as a `Failure`.
+The same judgement is what `WithStopOnGiveUp` acts on (spec 0010): a registered service failing for
+good stops the controller only under that opt-in, or when it was declared `WithRunToCompletion`.
+Every terminal event goes through `Services.terminal`, which publishes before it stops, so a new
+terminal path publishes through it rather than calling `publish`.
 
 **`RestartPolicy` is shared, and its rules are shared for real.** `restartsExhausted` and
 `classifyOutcome` in `services.go` have two callers each: a `Service`'s restart loop and a `Child`'s.

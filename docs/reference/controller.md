@@ -48,6 +48,9 @@ apply one after construction that is safe once the controller is running; see
 | `WithShutdownTimeout` | `WithShutdownTimeout(d time.Duration)` | `DefaultShutdownTimeout` (5s) | Bounds the **whole** stop phase, not each callback. A zero or negative `d` is not "use the default": it produces an already-expired budget, so stop callbacks are abandoned the instant they are launched and may never run at all. |
 | `WithSignals` | `WithSignals()` | no signal handling | Creates a signal channel with a one-slot buffer. `signal.Notify` for `SIGINT`/`SIGTERM` is registered in `Start`, not at construction, and detached again at shutdown. Do not use it under a CLI framework that already turns signals into cancellation. |
 | `WithOnEvent` | `WithOnEvent(fn func(ServiceEvent))` | none | Delivers every terminal service failure, and the latest of each run of retries, to `fn` on a goroutine of its own, in order. A retry waiting behind a slow `fn` is replaced by a newer one. `fn` may call `Stop`. A panic in it is recovered and logged. See [Events](#service-events). |
+| `WithStopOnGiveUp` | `WithStopOnGiveUp()` | nothing a service does stops the controller | Stops it with `CauseGaveUp` when a registered service fails for good: an exhausted policy, a failed start with no policy, or a death after a clean start, which it watches for in a service with a `Status` and no policy. See [Stop when a service gives up](../how-to/stop-on-give-up.md). |
+| `WithDeathWatch` | `WithDeathWatch(interval time.Duration, threshold int)` | 10s, 3 | The death watch's poll interval and the consecutive failures that end a service. A zero or negative value keeps its default. Does nothing without `WithStopOnGiveUp`. |
+| `WithCompletion` | `WithCompletion(p CompletionPolicy)` | `CompleteOnFirst` | Which `WithRunToCompletion` service's completion ends the controller: the first, or under `CompleteOnAll` the last outstanding. An unknown value acts as `CompleteOnFirst`, with a warning at `Start`. |
 | `WithOnPanic` | `WithOnPanic(fn func(PanicReport))` | none | Delivers every panic the controller recovers to `fn` on a goroutine of its own, from `Start` until shutdown's cutoff. It is beside the failure the panic causes, never instead of it. See [Panics](#panics). |
 | `WithProbePanicsAsFailures` | `WithProbePanicsAsFailures()` | a polled `Status` panic breaches at once | Counts a panic in a `WithStatus` probe polled by a restart policy as one failure towards `HealthFailureThreshold`. Nothing else changes. |
 | `WithValidError` | `WithValidError(fn func(error) bool)` | none | A `StartFunc` error for which `fn` returns true is classified as a normal end of run: not restarted, not counted, not forwarded on the error channel. Applies to every registered service; there is no per-service variant. (A `Supervisor`'s `Child` has its own `ValidError` field.) |
@@ -137,7 +140,7 @@ type ServiceEvent struct {
 | `Kind` | When | `Err` |
 |---|---|---|
 | `EventRetrying` | A run failed and the restart policy will run it again, including after a health-threshold breach. | The run's error, or `health check failed: …` for a breach. |
-| `EventFailed` | Terminal. The service started cleanly at least once, then failed and exhausted its policy. | Satisfies `errors.Is(err, ErrRestartsExhausted)` and the last error beside it: after health breaches, `max restarts exceeded: health check failed: …`. |
+| `EventFailed` | Terminal. The service started cleanly at least once, then failed and exhausted its policy, or had none and died under the death watch. | Satisfies `errors.Is(err, ErrRestartsExhausted)` and the last error beside it: after health breaches, `max restarts exceeded: health check failed: …`. |
 | `EventUnableToStart` | Terminal. The service never started cleanly and will not be tried again, including a service with no restart policy failing once. | As above, or the `StartFunc`'s error for a service with no policy. |
 
 `Restarts` is the consecutive-restart count, which resets after a healthy run;
@@ -191,7 +194,7 @@ type PanicReport struct {
 ```go
 type Outcome struct {
 	Cause      StopCause
-	Err        error     // context.Cause of the parent, for CauseParent
+	Err        error     // context.Cause of the parent for CauseParent; the failure for CauseGaveUp
 	Signal     os.Signal // for CauseSignal
 	Service    string    // for CauseGaveUp and CauseCompleted
 	Unfinished []Unfinished
@@ -209,17 +212,20 @@ type Unfinished struct {
 | `CauseStop` | `Stop()`, or `Stop` sent on `Messages()` |
 | `CauseSignal` | the first signal on a channel `WithSignals` owns |
 | `CauseParent` | the parent context's cancellation or deadline |
-| `CauseGaveUp`, `CauseCompleted` | reserved: nothing produces them yet |
+| `CauseGaveUp` | a service that failed for good, under `WithStopOnGiveUp`, or a `WithRunToCompletion` service. `Service` names it, and `Err` is its terminal event's error, which can be `context.Canceled`, so decide on `Cause` first. |
+| `CauseCompleted` | a `WithRunToCompletion` service's work finished, the last one outstanding under `CompleteOnAll`. `Service` names it, and `Err` is nil. |
 
 Exactly one cause is recorded however many triggers race, and the shutdown
-deadline is recorded with it, so the budget runs from the trigger.
+deadline is recorded with it, so the budget runs from the trigger. A service
+giving up after another trigger changes nothing, silently, though its event is
+still published.
 
 | `UnfinishedReason` | Meaning |
 |---|---|
 | `StopAbandoned` | The stop had budget left when called and had not returned when it expired. `StopErr` holds `ErrStopAbandoned`, and a later return does not overwrite it. |
 | `StopUnbudgeted` | The budget had already expired when this stop's turn came. It is still called, and not awaited. `StopErr` holds `ErrStopAbandoned`. |
 | `StopFailed` | The stop returned an error, or panicked, inside the budget. |
-| `SupervisorAbandoned` | The service's supervisor goroutine had not exited by the deadline. |
+| `SupervisorAbandoned` | The service's supervisor goroutine had not exited by the deadline: a `Start` that ignores cancellation, or a `Status` that blocks under the death watch. |
 
 `Complete()` is true when `Unfinished` is empty.
 
@@ -259,7 +265,8 @@ registration receiving signals nobody reads.
 | `DefaultShutdownTimeout` | `5 * time.Second` | Applied when `WithShutdownTimeout` is not passed. |
 | `DefaultRestartResetInterval` | `30 * time.Second` | Applied when `RestartPolicy.RestartResetInterval` is zero. |
 | `Stop` | `Message("stop")` | The only control message. |
-| `CauseStop`, `CauseSignal`, `CauseParent`, `CauseGaveUp`, `CauseCompleted` | `StopCause` values | What started a shutdown; the last two are reserved. |
+| `CauseStop`, `CauseSignal`, `CauseParent`, `CauseGaveUp`, `CauseCompleted` | `StopCause` values | What started a shutdown. |
+| `CompleteOnFirst`, `CompleteOnAll` | `CompletionPolicy` values | Which completion ends the controller. |
 | `StopAbandoned`, `StopUnbudgeted`, `StopFailed`, `SupervisorAbandoned` | `UnfinishedReason` values | Why a shutdown step did not finish. |
 | `EventRetrying`, `EventFailed`, `EventUnableToStart` | `EventKind` values | The kinds of `ServiceEvent`. |
 | `SiteStart`, `SiteStop`, `SiteProbe`, `SiteHealthCheck` | `PanicSite` values | Where a recovered panic was called from. |

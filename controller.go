@@ -70,6 +70,9 @@ type Controller struct {
 	onEvent               func(ServiceEvent)
 	onPanic               func(PanicReport)
 	probePanicsAsFailures bool
+	stopOnGiveUp          bool
+	deathWatch            deathWatch
+	completion            CompletionPolicy
 
 	// subMu orders subscribing to the error channel against shutdown's cutoff,
 	// after which no forwarder can start (spec 0008 D9).
@@ -276,7 +279,7 @@ func (c *Controller) markUnableToStart(name string, err error) {
 // bad: Stop would refuse, and the services that ARE running would never be told
 // to stop (D8). The controller reports unready in that state but it is still a
 // live process holding whatever its working services hold.
-func (c *Controller) beginShutdown(cause StopCause, err error, sig os.Signal) bool {
+func (c *Controller) beginShutdown(t trigger) bool {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
@@ -284,7 +287,7 @@ func (c *Controller) beginShutdown(cause StopCause, err error, sig os.Signal) bo
 		return false
 	}
 
-	c.recordCause(cause, err, sig)
+	c.recordCause(t)
 
 	return true
 }
@@ -303,12 +306,12 @@ func (c *Controller) enterStoppingLocked() bool {
 
 // recordCause records the first cause and the deadline it starts. Callers hold
 // stateMutex.
-func (c *Controller) recordCause(cause StopCause, err error, sig os.Signal) {
+func (c *Controller) recordCause(t trigger) {
 	if c.outcome.Cause != "" {
 		return
 	}
 
-	c.outcome.Cause, c.outcome.Err, c.outcome.Signal = cause, err, sig
+	c.outcome.Cause, c.outcome.Err, c.outcome.Signal, c.outcome.Service = t.cause, t.err, t.signal, t.service
 	c.deadline = time.Now().Add(c.shutdownTimeout)
 }
 
@@ -347,6 +350,15 @@ func (c *Controller) Start() {
 	// run can be classified.
 	c.services.validError = c.validError
 	c.services.probePanicsAsFailures = c.probePanicsAsFailures
+	c.services.stopOnGiveUp = c.stopOnGiveUp
+	c.services.deathWatch = c.deathWatch.resolved()
+	c.services.completeOnAll = c.completion == CompleteOnAll
+	c.services.endFor = c.endFor
+
+	if c.completion != CompleteOnFirst && c.completion != CompleteOnAll {
+		c.logger.Warn("unknown completion policy; completing on the first", "policy", c.completion)
+	}
+
 	c.services.onUnableToStart = c.markUnableToStart
 	c.services.publish = c.publish
 
@@ -418,15 +430,23 @@ func (c *Controller) WaitContext(ctx context.Context) error {
 // stopping or stopped are safely ignored. It may be called from a WithOnEvent
 // callback.
 func (c *Controller) Stop() {
-	if !c.stopFor(CauseStop, nil, nil) {
+	if !c.stopFor(trigger{cause: CauseStop}) {
 		c.logger.Warn("Stop called, but not in expected state, unable to continue", "current_state", c.GetState())
 	}
 }
 
-// stopFor starts a shutdown for cause and hands it to the message processor,
+// trigger is what started a shutdown, as Outcome records it.
+type trigger struct {
+	cause   StopCause
+	err     error
+	signal  os.Signal
+	service string
+}
+
+// stopFor starts a shutdown for t and hands it to the message processor,
 // reporting whether this caller started it.
-func (c *Controller) stopFor(cause StopCause, err error, sig os.Signal) bool {
-	if !c.beginShutdown(cause, err, sig) {
+func (c *Controller) stopFor(t trigger) bool {
+	if !c.beginShutdown(t) {
 		return false
 	}
 
@@ -470,7 +490,7 @@ func (c *Controller) startSignalHandler() {
 		case sig := <-c.Signals():
 			c.logger.Warn("received signal", "signal", sig)
 
-			if !c.stopFor(CauseSignal, nil, sig) {
+			if !c.stopFor(trigger{cause: CauseSignal, signal: sig}) {
 				c.logger.Warn("signal received, but not in expected state, unable to continue", "current_state", c.GetState())
 			}
 		case <-c.shutdownComplete:
@@ -505,7 +525,7 @@ func (c *Controller) startParentWatch() {
 				// this point (the stop below is what cancels it).
 				cause := context.Cause(c.parent)
 				c.logger.Debug("stopping due to parent context completion", "error", cause)
-				c.stopFor(CauseParent, cause, nil)
+				c.stopFor(trigger{cause: CauseParent, err: cause})
 			}
 		case <-c.shutdownComplete:
 		}
@@ -611,7 +631,7 @@ func (c *Controller) enterShutdownFromMessage() (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	c.recordCause(CauseStop, nil, nil)
+	c.recordCause(trigger{cause: CauseStop})
 
 	return c.deadline, true
 }

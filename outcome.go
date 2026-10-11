@@ -21,11 +21,10 @@ const (
 	// CauseParent is the completion of the context given to NewController, by
 	// cancellation or deadline.
 	CauseParent StopCause = "parent"
-	// CauseGaveUp is a service that failed for good. Reserved: nothing produces it
-	// until stopping on a terminal failure lands (issue 15).
+	// CauseGaveUp is a service that failed for good, under WithStopOnGiveUp or
+	// WithRunToCompletion.
 	CauseGaveUp StopCause = "gave_up"
-	// CauseCompleted is a service whose work finished. Reserved: nothing produces
-	// it until run-to-completion lands (issue 17).
+	// CauseCompleted is a WithRunToCompletion service whose work finished.
 	CauseCompleted StopCause = "completed"
 )
 
@@ -45,7 +44,7 @@ const (
 	StopFailed UnfinishedReason = "stop_failed"
 	// SupervisorAbandoned is a service's supervising goroutine that had not exited
 	// by the deadline: usually a Start that ignores cancellation, also a Status
-	// probe or a health-triggered stop that does.
+	// probe, a death-watched Status or a health-triggered stop that does.
 	SupervisorAbandoned UnfinishedReason = "supervisor_abandoned"
 )
 
@@ -65,7 +64,8 @@ type Unfinished struct {
 type Outcome struct {
 	Cause StopCause
 	// Err is what the trigger carried: context.Cause of the parent for
-	// CauseParent, nil otherwise.
+	// CauseParent, the terminal failure for CauseGaveUp, nil otherwise. It can
+	// be context.Canceled under CauseGaveUp, so decide on Cause first.
 	Err error
 	// Signal is set for CauseSignal.
 	Signal os.Signal

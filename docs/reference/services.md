@@ -37,6 +37,7 @@ call it:
 | `WithLiveness` | `func() error` | falls back to `WithStatus` | Feeds `Liveness()` only. |
 | `WithReadiness` | `func() error` | falls back to `WithStatus` | Feeds `Readiness()` only. |
 | `WithRestartPolicy` | `RestartPolicy` (by value) | no restarts at all | The policy is copied at registration; later mutation of your struct has no effect. |
+| `WithRunToCompletion` | — | a `nil` return is a clean background start | Declares the service a unit of work: a `nil` return with the controller live stops it with `CauseCompleted`, and any error return, `context.Canceled` and a valid error included, is a failure that stops it with `CauseGaveUp` once the service fails for good. A completed service is not health-monitored. See [Stop when a service gives up](../how-to/stop-on-give-up.md). |
 | `WithRestartResetInterval` | `time.Duration` | `DefaultRestartResetInterval` (30s) | Sets `RestartPolicy.RestartResetInterval`, creating a zero-valued policy first if the service has none, so this option alone **enables restarts, with every other field at its default, including unlimited `MaxRestarts`**. Order relative to `WithRestartPolicy` does not matter. |
 
 ## What each callback must honour
@@ -152,28 +153,15 @@ supervising that service and records an error that `errors.Is` matches against
 - from an error-driven restart loop, `max restarts exceeded: <last start error>`,
   and `errors.Is` against the last error still matches too, since the error
   unwraps to both;
-- from a health-driven restart loop, `ErrRestartsExhausted` itself, whose
-  message is `max restarts exceeded`, because the health failure was recorded
-  on `ServiceInfo.Error` rather than returned.
+- from a health-driven restart loop, `max restarts exceeded: health check
+  failed: <last health error>`, matching the health error the same way.
 
 That error is stored on `ServiceInfo.Error` and carried by the terminal
 `ServiceEvent`, `EventFailed` or `EventUnableToStart`, and on the error channel.
-A consumer that wants the process to end when a service will not come back
-reacts to those kinds and calls `Stop()`:
-
-```go
-var c *controls.Controller
-
-c = controls.NewController(ctx, controls.WithOnEvent(func(ev controls.ServiceEvent) {
-	if ev.Kind != controls.EventRetrying {
-		c.Stop()
-	}
-}))
-```
-
-**The controller keeps running.** A service exhausting its restarts, or failing
-with no policy at all, never shuts the process down; the controller stops only
-on `Stop()`, a signal it owns, or completion of the parent context.
+**The controller keeps running, unless you opt in.** A service exhausting its
+restarts, or failing with no policy at all, does not shut the process down by
+default. `WithStopOnGiveUp` makes it stop the controller with `CauseGaveUp`; see
+[Stop when a service gives up](../how-to/stop-on-give-up.md).
 
 **What it does change is readiness, but only if the service never started.** A
 service that has never started cleanly and has exhausted its policy will never

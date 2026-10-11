@@ -26,20 +26,21 @@ Only shutdown is ordered: stop callbacks run one at a time in reverse
 registration order. If service B must not begin work until service A is up, gate
 it inside B's own `StartFunc`, for example by waiting on a channel A closes.
 
-## It does not stop the process when a service dies
+## It does not stop the process when a service dies, unless you ask
 
-A `StartFunc` that returns an error, or a service that exhausts `MaxRestarts`,
-does not shut the controller down. The error is recorded on `ServiceInfo`,
-forwarded on the error channel and logged; the controller stays `Running` and
-every other service carries on. The controller stops only on `Stop()`, on a
-signal it owns via `WithSignals`, or when the parent context completes.
+By default a `StartFunc` that returns an error, or a service that exhausts
+`MaxRestarts`, does not shut the controller down. The error is recorded on
+`ServiceInfo`, forwarded on the error channel and logged; every other service
+carries on.
 
-If a failed service should take the process with it, watch for it yourself and
-call `Stop()`. `WithOnEvent` gives you a typed `ServiceEvent` for every failure:
-react to the terminal kinds, `EventFailed` and `EventUnableToStart`, and ignore
-`EventRetrying`, which the restart policy is already handling. Calling `Stop()`
-from the callback is supported. The error channel carries the same failures as
-bare errors, without their kind, and only from your first `Errors()` call.
+`WithStopOnGiveUp` changes that: a service that fails for good stops the
+controller with `CauseGaveUp`, naming it on `Outcome`, and a server with no
+restart policy is watched for a death after a clean start.
+`WithRunToCompletion` stops it with `CauseCompleted` when a unit of work
+finishes. See [Stop when a service gives up](../how-to/stop-on-give-up.md).
+
+Two deaths stay invisible even then: a service with a restart policy and no
+`Status` or no `HealthFailureThreshold`, and a `Supervisor`'s child.
 
 ## A health report is not proof a service is running
 
