@@ -97,6 +97,16 @@ type forwarder[K comparable, T any] struct {
 	onExit    func()
 }
 
+// unabandonable adapts a callback for a forwarder that is closed and never
+// abandoned, as a Supervisor's are.
+func unabandonable[T any](fn func(T)) func(T, <-chan struct{}) bool {
+	return func(item T, _ <-chan struct{}) bool {
+		fn(item)
+
+		return true
+	}
+}
+
 // drainable is a forwarder of any item, as shutdown's cutoff and drain see it.
 type drainable interface {
 	closeAdmission()

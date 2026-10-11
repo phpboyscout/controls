@@ -56,10 +56,8 @@ type Supervisor struct {
 
 	onFailure   func(Failure)
 	onPanic     func(PanicReport)
+	failuresFwd *failureForwarder
 	panicsFwd   *panicForwarder
-	queue       []Failure
-	queueWake   chan struct{}
-	queueClosed bool
 
 	failures    chan Failure
 	failuresOn  bool
@@ -296,9 +294,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.state = supRunning
 
 	if s.onFailure != nil {
-		s.queueWake = make(chan struct{}, 1)
-
-		go s.dispatchLoop()
+		s.failuresFwd = newFailureForwarder(s.invoke)
 	}
 
 	if s.onPanic != nil {
@@ -608,60 +604,21 @@ func (s *Supervisor) fail(c *supervisedChild, restarts int, err error, panicked 
 		}
 	}
 
-	if s.onFailure != nil {
-		s.enqueue(f)
-	}
-}
-
-// enqueue adds a failure to the callback's ordered queue and wakes the dispatch
-// goroutine. It never blocks the caller, which is a supervision goroutine.
-func (s *Supervisor) enqueue(f Failure) {
 	s.mu.Lock()
-
-	if s.queueClosed {
-		s.mu.Unlock()
-
-		return
-	}
-
-	s.queue = append(s.queue, f)
-	wake := s.queueWake
+	fwd := s.failuresFwd
 	s.mu.Unlock()
 
-	select {
-	case wake <- struct{}{}:
-	default:
+	if fwd != nil {
+		fwd.enqueue(struct{}{}, f)
 	}
 }
 
-// dispatchLoop delivers failures to the callback, one at a time and in order,
-// until the queue is closed and drained.
-//
-// Nothing joins this goroutine. Stop closing the queue is what ends it, and a
-// callback that calls Stop would otherwise be waiting for itself.
-func (s *Supervisor) dispatchLoop() {
-	for {
-		s.mu.Lock()
+// failureForwarder delivers every failure in order: nothing merges, so the key
+// is unused.
+type failureForwarder = forwarder[struct{}, Failure]
 
-		if len(s.queue) == 0 {
-			closed, wake := s.queueClosed, s.queueWake
-			s.mu.Unlock()
-
-			if closed {
-				return
-			}
-
-			<-wake
-
-			continue
-		}
-
-		f := s.queue[0]
-		s.queue = s.queue[1:]
-		s.mu.Unlock()
-
-		s.invoke(f)
-	}
+func newFailureForwarder(deliver func(Failure)) *failureForwarder {
+	return newForwarder(&failureForwarder{consumer: "WithOnFailure", deliver: unabandonable(deliver)})
 }
 
 // invoke calls the consumer's callback behind a recover, so a panic in it kills
@@ -674,23 +631,16 @@ func (s *Supervisor) invoke(f Failure) {
 
 func (s *Supervisor) closeQueue() {
 	s.mu.Lock()
-	s.queueClosed = true
-	wake := s.queueWake
-	panics := s.panicsFwd
+	failures, panics := s.failuresFwd, s.panicsFwd
 	s.mu.Unlock()
 
 	// Closed, never joined: a callback may be the caller of this Stop.
+	if failures != nil {
+		failures.closeAdmission()
+	}
+
 	if panics != nil {
 		panics.closeAdmission()
-	}
-
-	if wake == nil {
-		return
-	}
-
-	select {
-	case wake <- struct{}{}:
-	default:
 	}
 }
 

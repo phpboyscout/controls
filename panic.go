@@ -101,12 +101,8 @@ type panicForwarder = forwarder[panicKey, PanicReport]
 // which bounds the queue by reporters and sites (spec 0009 D11).
 func newPanicForwarder(consumer string, deliver func(PanicReport)) *panicForwarder {
 	return newForwarder(&panicForwarder{
-		consumer: consumer,
-		deliver: func(r PanicReport, _ <-chan struct{}) bool {
-			deliver(r)
-
-			return true
-		},
+		consumer:  consumer,
+		deliver:   unabandonable(deliver),
 		mergeable: func(PanicReport) bool { return true },
 		merge: func(waiting *PanicReport, next PanicReport) {
 			waiting.Value, waiting.Err = next.Value, next.Err

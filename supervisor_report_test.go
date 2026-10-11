@@ -2,10 +2,12 @@ package controls_test
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"gitlab.com/phpboyscout/go/errors"
 
 	"gitlab.com/phpboyscout/go/controls"
@@ -227,4 +229,64 @@ func TestSupervisorAndServiceRestartAlike(t *testing.T) {
 		t.Errorf("a Service ran %d times and a Child ran %d with the same policy; the shared rule has diverged",
 			serviceRuns.Load(), childRuns.Load())
 	}
+}
+
+// TestSupervisorCallbackPanicLosesNoLaterFailure — the recover is per call, so
+// a callback that panics every time still sees every failure.
+func TestSupervisorCallbackPanicLosesNoLaterFailure(t *testing.T) {
+	t.Parallel()
+
+	const children = 5
+
+	var calls atomic.Int64
+
+	s := controls.NewSupervisor(controls.WithOnFailure(func(controls.Failure) {
+		calls.Add(1)
+		panic("callback")
+	}))
+
+	for i := range children {
+		_ = s.Attach(controls.Child{Name: string(rune('a' + i)), Start: alwaysFails})
+	}
+
+	_ = s.Start(t.Context())
+
+	require.Eventually(t, func() bool { return calls.Load() == children }, 3*time.Second, 5*time.Millisecond,
+		"a panicking callback stopped later deliveries")
+
+	s.Stop(t.Context())
+}
+
+// TestSupervisorFailuresQueuedBeforeStopStillArrive — Stop closes the queue to
+// new failures, and drains the ones already in it, even when the callback is
+// what called Stop.
+func TestSupervisorFailuresQueuedBeforeStopStillArrive(t *testing.T) {
+	t.Parallel()
+
+	const children = 5
+
+	release := make(chan struct{})
+
+	var (
+		calls atomic.Int64
+		once  sync.Once
+		s     *controls.Supervisor
+	)
+
+	s = controls.NewSupervisor(controls.WithOnFailure(func(controls.Failure) {
+		<-release
+		once.Do(func() { s.Stop(context.Background()) })
+		calls.Add(1)
+	}))
+
+	for i := range children {
+		_ = s.Attach(controls.Child{Name: string(rune('a' + i)), Start: alwaysFails})
+	}
+
+	_ = s.Start(t.Context())
+	time.Sleep(settle)
+	close(release)
+
+	require.Eventually(t, func() bool { return calls.Load() == children }, 3*time.Second, 5*time.Millisecond,
+		"failures queued before Stop were dropped")
 }
