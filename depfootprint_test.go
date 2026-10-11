@@ -6,41 +6,56 @@ import (
 	"testing"
 )
 
-// TestDependencyFootprint is the enforceable statement of "framework-free": the
-// module's transitive dependency graph must not pull in go-tool-base, the CLI/
-// config/TUI stack, OpenTelemetry, or any cloud SDK. controls is a pure lifecycle
-// supervisor whose only external dependency is gitlab.com/phpboyscout/go/errors;
-// a regression that reintroduces framework coupling fails here rather than
-// silently bloating every downstream binary.
-//
-// go list -deps ./... does not descend into lint/, which holds its own go.mod,
-// so the analyzer's x/tools dependency never appears here (spec 0005 D1).
+// runtimeForbidden is what controls' own package may not pull in: framework-free
+// means its only external dependency is gitlab.com/phpboyscout/go/errors, and a
+// regression that reintroduces framework coupling bloats every downstream binary.
+var runtimeForbidden = []string{
+	"gitlab.com/phpboyscout/go-tool-base",
+	"github.com/spf13/viper",
+	"github.com/spf13/pflag",
+	"github.com/spf13/cobra",
+	"github.com/charmbracelet",
+	"go.opentelemetry.io",
+	"github.com/aws/aws-sdk-go",
+	"github.com/aws/aws-sdk-go-v2",
+	"cloud.google.com/go",
+	"github.com/Azure/azure-sdk-for-go",
+}
+
+// TestDependencyFootprint scans the package, not ./..., so a subpackage's
+// dependencies would never count as runtime. lint/ holds its own go.mod and is
+// outside either scan (spec 0005 D1).
 func TestDependencyFootprint(t *testing.T) {
 	t.Parallel()
 
-	out, err := exec.Command("go", "list", "-deps", "./...").Output()
+	out, err := exec.Command("go", "list", "-deps",
+		"-f", "{{.ImportPath}}\t{{if .Module}}{{.Module.Path}}{{end}}", ".").Output()
 	if err != nil {
 		t.Fatalf("go list -deps: %v", err)
 	}
 
-	forbidden := []string{
-		"gitlab.com/phpboyscout/go-tool-base",
-		"github.com/spf13/viper",
-		"github.com/spf13/pflag",
-		"github.com/spf13/cobra",
-		"github.com/charmbracelet",
-		"go.opentelemetry.io",
-		"github.com/aws/aws-sdk-go",
-		"cloud.google.com/go",
-		"github.com/Azure/azure-sdk",
+	sawErrors := false
+	reported := map[string]bool{}
+
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		pkg, module, _ := strings.Cut(line, "\t")
+
+		// The one dependency that must be there proves the scan walked the graph.
+		if module == "gitlab.com/phpboyscout/go/errors" {
+			sawErrors = true
+		}
+
+		if !matchesModule(runtimeForbidden, module) || reported[module] {
+			continue
+		}
+
+		reported[module] = true
+
+		t.Errorf("forbidden module in the runtime graph: %s (package %s)", module, pkg)
 	}
 
-	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		for _, bad := range forbidden {
-			if strings.HasPrefix(dep, bad) {
-				t.Errorf("forbidden dependency in graph: %s (matched %q)", dep, bad)
-			}
-		}
+	if !sawErrors {
+		t.Fatal("the scan does not contain gitlab.com/phpboyscout/go/errors, so it did not see the graph")
 	}
 }
 
@@ -79,7 +94,7 @@ func TestTestGraphFootprint(t *testing.T) {
 			sawTestMain = true
 		}
 
-		if !forbiddenInTests(module) || reported[module] {
+		if !matchesModule(testGraphForbidden, module) || reported[module] {
 			continue
 		}
 
@@ -93,35 +108,63 @@ func TestTestGraphFootprint(t *testing.T) {
 	}
 }
 
-// TestTestGraphMatcherRespectsPathBoundary is the guard's self-test: a healthy
-// repository matches nothing, so a matcher that stopped matching would look clean.
-func TestTestGraphMatcherRespectsPathBoundary(t *testing.T) {
+// TestMatcherRespectsPathBoundary is the guards' self-test: a healthy repository
+// matches nothing, so a matcher that stopped matching would look clean.
+func TestMatcherRespectsPathBoundary(t *testing.T) {
 	t.Parallel()
 
-	for _, module := range []string{
-		"gitlab.com/phpboyscout/go-tool-base",
-		"github.com/spf13/viper",
-		"github.com/spf13/cobra",
-		"github.com/disgoorg",
-		"gitlab.com/phpboyscout/go-tool-base/pkg",
-	} {
-		if !forbiddenInTests(module) {
-			t.Errorf("%s should be forbidden in the test graph", module)
-		}
+	cases := []struct {
+		list      []string
+		forbidden []string
+		permitted []string
+	}{
+		{
+			list: testGraphForbidden,
+			forbidden: []string{
+				"gitlab.com/phpboyscout/go-tool-base",
+				"github.com/spf13/viper",
+				"github.com/spf13/cobra",
+				"github.com/disgoorg",
+				"gitlab.com/phpboyscout/go-tool-base/pkg",
+			},
+			permitted: []string{"github.com/spf13/viper-fork", "github.com/stretchr/testify"},
+		},
+		{
+			list: runtimeForbidden,
+			forbidden: []string{
+				"github.com/charmbracelet/bubbletea",
+				"go.opentelemetry.io/otel",
+				"github.com/aws/aws-sdk-go",
+				"github.com/aws/aws-sdk-go-v2/service/s3",
+				"github.com/Azure/azure-sdk-for-go/sdk/azcore",
+				"cloud.google.com/go/storage",
+			},
+			permitted: []string{
+				"gitlab.com/phpboyscout/go/errors",
+				"github.com/spf13/pflag-extra",
+				"github.com/charmbracelet-fork/x",
+				"cloud.google.com/gopher",
+			},
+		},
 	}
 
-	for _, module := range []string{
-		"github.com/spf13/viper-fork",
-		"github.com/stretchr/testify",
-	} {
-		if forbiddenInTests(module) {
-			t.Errorf("%s should be permitted in the test graph", module)
+	for _, c := range cases {
+		for _, module := range c.forbidden {
+			if !matchesModule(c.list, module) {
+				t.Errorf("%s should be forbidden", module)
+			}
+		}
+
+		for _, module := range c.permitted {
+			if matchesModule(c.list, module) {
+				t.Errorf("%s should be permitted", module)
+			}
 		}
 	}
 }
 
-func forbiddenInTests(module string) bool {
-	for _, bad := range testGraphForbidden {
+func matchesModule(list []string, module string) bool {
+	for _, bad := range list {
 		if module == bad || strings.HasPrefix(module, bad+"/") {
 			return true
 		}
