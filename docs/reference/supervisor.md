@@ -35,6 +35,7 @@ would otherwise loop.
 ```go
 func NewSupervisor(opts ...SupervisorOption) *Supervisor
 func WithOnFailure(fn func(Failure)) SupervisorOption
+func WithOnChildPanic(fn func(PanicReport)) SupervisorOption
 ```
 
 `WithOnFailure` registers a callback for a child that has exhausted its restart
@@ -45,6 +46,13 @@ and none is lost.
 The callback may call back into the supervisor, `Stop` included: nothing is held
 while it runs and nothing joins its goroutine. The corollary is that `Stop`
 returning does not mean every callback has finished.
+
+`WithOnChildPanic` hands every panic recovered in a child's `Start` or `Stop` to
+`fn` as a [`PanicReport`](controller.md#panics), on the same terms: its own
+goroutine, never joined, so it may call `Stop`. It runs from `Start` until `Stop`
+closes the queue; a panic after that, such as in a stop that settles late, is not
+reported. While `fn` is busy, repeats at one child and site merge into the
+latest, with `Repeats` counting them. A panic in `fn` is discarded.
 
 ## Methods
 
@@ -114,7 +122,7 @@ type Child struct {
 | `nil` | the child finished. Not restarted, reports `stopped`. **A `Service` returning `nil` is still serving**; a child is not |
 | `context.Canceled`, or anything once the supervisor's context is cancelled | a clean cancellation. No restart, no `Failure` |
 | any other error | a failure: recorded, counted against the policy, restarted or reported terminal |
-| a panic | converted to an error, counted separately in `ChildStatus.Panics` and flagged in `Failure.Panicked` |
+| a panic | converted to an error wrapping `ErrPanicked`, counted separately in `ChildStatus.Panics` and flagged in `Failure.Panicked`. Never a `ValidError` match |
 
 **`ValidError` is a child's own `WithValidError`.** A predicate that accepts an
 error makes it a clean stop: no restart, no `Failure`, exactly as a `Controller`'s

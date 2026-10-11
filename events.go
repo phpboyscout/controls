@@ -51,20 +51,32 @@ func (c *Controller) setOnEvent(fn func(ServiceEvent)) {
 	c.onEvent = fn
 }
 
-type queuedEvent struct {
-	index int // registration index; merging is per service, never per name
-	event ServiceEvent
+// eventForwarder carries ServiceEvents, merging a service's waiting retry by
+// registration index, never by name.
+type eventForwarder = forwarder[int, ServiceEvent]
+
+func newEventForwarder(f *eventForwarder) *eventForwarder {
+	f.mergeable = func(ev ServiceEvent) bool { return ev.Kind == EventRetrying }
+	f.merge = func(waiting *ServiceEvent, next ServiceEvent) { *waiting = next }
+
+	return newForwarder(f)
+}
+
+type queued[K comparable, T any] struct {
+	key  K
+	item T
 }
 
 // forwarder is the only deliverer to one consumer, fed by a queue that never
-// blocks its producers (spec 0008 D8).
-type forwarder struct {
+// blocks its producers (spec 0008 D8). An item still waiting absorbs a later
+// one with the same key while mergeable says it may.
+type forwarder[K comparable, T any] struct {
 	mu        sync.Mutex
-	queue     []*queuedEvent
-	waiting   map[int]*queuedEvent // an unclaimed retry, by registration index
+	queue     []*queued[K, T]
+	waiting   map[K]*queued[K, T] // an unclaimed mergeable item, by key
 	closed    bool
 	abandoned bool
-	// dropped is an event claimed and then abandoned mid-delivery. Read only
+	// dropped is an item claimed and then abandoned mid-delivery. Read only
 	// after exited.
 	dropped int
 
@@ -77,14 +89,24 @@ type forwarder struct {
 	// stops promptly and must be waited for before Done.
 	awaitAfterAbandon bool
 
-	// deliver hands one event to the consumer, and reports false if delivery
+	// deliver hands one item to the consumer, and reports false if delivery
 	// was abandoned instead.
-	deliver func(ev ServiceEvent, abandon <-chan struct{}) bool
-	onExit  func()
+	deliver   func(item T, abandon <-chan struct{}) bool
+	mergeable func(item T) bool
+	merge     func(waiting *T, next T)
+	onExit    func()
 }
 
-func newForwarder(f *forwarder) *forwarder {
-	f.waiting = make(map[int]*queuedEvent)
+// drainable is a forwarder of any item, as shutdown's cutoff and drain see it.
+type drainable interface {
+	closeAdmission()
+	finished() <-chan struct{}
+	abandonDelivery() int
+	consumerName() string
+}
+
+func newForwarder[K comparable, T any](f *forwarder[K, T]) *forwarder[K, T] {
+	f.waiting = make(map[K]*queued[K, T])
 	f.wake = make(chan struct{}, 1)
 	f.abandon = make(chan struct{})
 	f.exited = make(chan struct{})
@@ -94,16 +116,16 @@ func newForwarder(f *forwarder) *forwarder {
 	return f
 }
 
-func (f *forwarder) signal() {
+func (f *forwarder[K, T]) signal() {
 	select {
 	case f.wake <- struct{}{}:
 	default:
 	}
 }
 
-// enqueue appends ev, or replaces the service's retry still waiting in place.
-// Terminal events are never merged. After closeAdmission it does nothing.
-func (f *forwarder) enqueue(index int, ev ServiceEvent) {
+// enqueue appends item, or merges it into the one with its key still waiting.
+// After closeAdmission it does nothing.
+func (f *forwarder[K, T]) enqueue(key K, item T) {
 	f.mu.Lock()
 
 	if f.closed {
@@ -112,38 +134,42 @@ func (f *forwarder) enqueue(index int, ev ServiceEvent) {
 		return
 	}
 
-	if w, ok := f.waiting[index]; ok && ev.Kind == EventRetrying {
-		w.event = ev
+	mergeable := f.mergeable != nil && f.mergeable(item)
+
+	if w, ok := f.waiting[key]; ok && mergeable {
+		f.merge(&w.item, item)
 		f.mu.Unlock()
 
 		return
 	}
 
-	q := &queuedEvent{index: index, event: ev}
+	q := &queued[K, T]{key: key, item: item}
 	f.queue = append(f.queue, q)
 
-	// Nothing merges across a terminal event, so a service's events keep their
+	// Nothing merges across an unmergeable item, so one key's items keep their
 	// order whatever arrives after it.
-	if ev.Kind == EventRetrying {
-		f.waiting[index] = q
+	if mergeable {
+		f.waiting[key] = q
 	} else {
-		delete(f.waiting, index)
+		delete(f.waiting, key)
 	}
 
 	f.mu.Unlock()
 	f.signal()
 }
 
-// next claims the next event. Abandonment is checked in the same critical
-// section as the claim, so an event is either claimed before it or never.
-func (f *forwarder) next() (ServiceEvent, bool) {
+// next claims the next item. Abandonment is checked in the same critical
+// section as the claim, so an item is either claimed before it or never.
+func (f *forwarder[K, T]) next() (T, bool) {
+	var none T
+
 	for {
 		f.mu.Lock()
 
 		if f.abandoned {
 			f.mu.Unlock()
 
-			return ServiceEvent{}, false
+			return none, false
 		}
 
 		if len(f.queue) > 0 {
@@ -151,19 +177,19 @@ func (f *forwarder) next() (ServiceEvent, bool) {
 			f.queue[0] = nil
 			f.queue = f.queue[1:]
 
-			if f.waiting[q.index] == q {
-				delete(f.waiting, q.index)
+			if f.waiting[q.key] == q {
+				delete(f.waiting, q.key)
 			}
 
 			f.mu.Unlock()
 
-			return q.event, true
+			return q.item, true
 		}
 
 		if f.closed {
 			f.mu.Unlock()
 
-			return ServiceEvent{}, false
+			return none, false
 		}
 
 		f.mu.Unlock()
@@ -175,7 +201,7 @@ func (f *forwarder) next() (ServiceEvent, bool) {
 	}
 }
 
-func (f *forwarder) run() {
+func (f *forwarder[K, T]) run() {
 	defer close(f.exited)
 
 	if f.onExit != nil {
@@ -183,12 +209,12 @@ func (f *forwarder) run() {
 	}
 
 	for {
-		ev, ok := f.next()
+		item, ok := f.next()
 		if !ok {
 			return
 		}
 
-		if !f.deliver(ev, f.abandon) {
+		if !f.deliver(item, f.abandon) {
 			f.dropped++
 
 			return
@@ -196,17 +222,18 @@ func (f *forwarder) run() {
 	}
 }
 
-// closeAdmission refuses further events; the forwarder exits once the queue is
+// closeAdmission refuses further items; the forwarder exits once the queue is
 // empty.
-func (f *forwarder) closeAdmission() {
+func (f *forwarder[K, T]) closeAdmission() {
 	f.mu.Lock()
 	f.closed = true
 	f.mu.Unlock()
 	f.signal()
 }
 
-// abandonDelivery ends delivery and returns how many events were left.
-func (f *forwarder) abandonDelivery() int {
+// abandonDelivery ends delivery and returns how many items were left,
+// counting one abandoned mid-delivery when the forwarder is awaited.
+func (f *forwarder[K, T]) abandonDelivery() int {
 	f.mu.Lock()
 	f.abandoned = true
 	left := len(f.queue)
@@ -214,5 +241,15 @@ func (f *forwarder) abandonDelivery() int {
 
 	close(f.abandon)
 
+	if f.awaitAfterAbandon {
+		<-f.exited
+
+		left += f.dropped
+	}
+
 	return left
 }
+
+func (f *forwarder[K, T]) finished() <-chan struct{} { return f.exited }
+
+func (f *forwarder[K, T]) consumerName() string { return f.consumer }

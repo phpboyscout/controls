@@ -44,11 +44,11 @@ Any probe or check that reports unhealthy flips `OverallHealthy` to `false`.
 
 A panic in a **service probe** (`WithStatus`, `WithLiveness`, `WithReadiness`)
 called while a report is built is recovered and surfaces as a
-`probe panicked: <value>` error entry rather than crashing the report. That
-recovery does not extend to a standalone `HealthCheck.Check`, nor to a
-`WithStatus` probe polled by the restart supervisor; a panic in either of those
-crashes the process. See
-[What controls does not do](limitations.md#it-does-not-recover-panics-in-your-start-callbacks-or-standalone-checks).
+`probe panicked: <value>` error entry rather than crashing the report. A panic in
+a standalone `HealthCheck.Check` reports that check unhealthy with
+`health check panicked: <value>`. A `WithStatus` probe polled by the restart
+supervisor is recovered too, and its panic is a breach at once. See
+[What controls does not do](limitations.md#it-cannot-recover-a-panic-on-a-goroutine-your-callback-started).
 
 ## Check types decide where a check appears
 

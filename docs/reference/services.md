@@ -56,9 +56,12 @@ the deadline and names it in a `WARN`, but a bare `Wait()` then blocks forever.
 Use `WaitContext` when a service wraps third-party code that may not honour
 cancellation.
 
-**A panic inside a `StartFunc` is not recovered and crashes the process.**
-Unlike stop callbacks and health probes, start callbacks have no recovery
-wrapper. Recover inside your own function if the work can panic.
+**A panic inside a `StartFunc` is that service's failure.** It is recovered,
+wrapped as `controls: service "<name>" panicked: <value>` satisfying
+`errors.Is(err, ErrPanicked)`, and handled like any other error: retried under a
+restart policy, `UnableToStart` without one. It is never a valid error, whatever
+`WithValidError` says. A goroutine the `StartFunc` launches is not covered;
+recover inside it.
 
 **A restart calls it again with the same closure.** Anything the closure
 captured is shared between runs, so a listener, a server or a supervisor built
@@ -102,9 +105,10 @@ had happened.
   that does I/O.
 - A panic in a probe called from `Status()`, `Liveness()` or `Readiness()` is
   recovered and reported as `probe panicked: <value>`.
-- **A panic in a `WithStatus` probe polled by the restart supervisor is not
-  recovered and crashes the process.** The recovery wrapper is applied on the
-  report path only.
+- **A panic in a `WithStatus` probe polled by the restart supervisor breaches at
+  once**, whatever `HealthFailureThreshold` is: the service is stopped and
+  restarted under its policy, with `health check failed: probe panicked: …`.
+  `WithProbePanicsAsFailures` makes it count as one failure instead.
 - **It must report the current run.** A status cell the closure captured and
   never cleared between restarts keeps reporting the previous run's failure,
   which trips the health threshold again.

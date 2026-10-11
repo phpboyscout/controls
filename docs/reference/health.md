@@ -22,7 +22,7 @@ type HealthCheck struct {
 | Field | Required | Zero value means | What it controls |
 |---|---|---|---|
 | `Name` | yes | — | The `name` in the report entry, and the key for `GetCheckResult`. Must be unique **among health checks**; `RegisterHealthCheck` returns `duplicate health check name: "<name>"` otherwise. |
-| `Check` | yes | **crashes the process**: a nil `Check` is called and panics on its first run | The probe. The `ctx` it receives already carries `Timeout`. |
+| `Check` | yes | reports unhealthy: a nil `Check` is called and panics, recovered as `health check panicked: …` | The probe. The `ctx` it receives already carries `Timeout`. A panic in it reports the check unhealthy with `health check panicked: <value>`. |
 | `Timeout` | no | use the default (5s) | Bounds a single run of `Check`. |
 | `Interval` | no | synchronous: run inline on every report that includes it | Non-zero makes the check asynchronous: a background goroutine polls it and reports read the cached result. |
 | `Type` | no | `CheckTypeReadiness` | Which reports the check appears in. |
@@ -65,9 +65,10 @@ because a check with no result cannot say a dependency is well, but the message
 names the real cause: an operator reading "timed out" during a shutdown looks for
 a slow dependency that was never there.
 
-**A panic inside `Check` is not recovered and crashes the process.** Service
-probes are wrapped; standalone checks are not. Recover inside your own `Check`
-if the probe can panic.
+**A panic inside `Check` reports the check unhealthy**, with the message
+`health check panicked: <value>`, and reaches `WithOnPanic`. `CheckResult` has
+no error field, so match on that prefix. A goroutine `Check` starts is not
+covered.
 
 ## CheckResult
 

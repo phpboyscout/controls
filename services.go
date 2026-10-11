@@ -67,6 +67,12 @@ type Services struct {
 	// copy (issue 13).
 	infoMu     sync.Mutex
 	validError ValidErrorFunc
+	// probePanicsAsFailures counts a polled Status panic as one failure rather
+	// than a breach (spec 0009 D10). Set by the controller at Start.
+	probePanicsAsFailures bool
+	// reporterFor makes the panic reporter for a registration index and site.
+	// Wired at construction, nil without WithOnPanic (spec 0009 D11).
+	reporterFor func(reporter any, name string, site PanicSite) panicReporter
 	// onUnableToStart is called when a service has failed without ever starting
 	// cleanly and has exhausted its restart policy, so it will never start. Set
 	// by the controller at Start, alongside validError.
@@ -125,6 +131,12 @@ func classifyOutcome(ctx context.Context, err error, valid ValidErrorFunc) runOu
 		return outcomeCancelled
 	}
 
+	// A panic is a defect, so no ValidErrorFunc may pass it as an expected
+	// finish (spec 0009 D5).
+	if errors.Is(err, ErrPanicked) {
+		return outcomeError
+	}
+
 	if valid != nil && valid(err) {
 		return outcomeCancelled
 	}
@@ -147,7 +159,9 @@ func restartsExhausted(policy *RestartPolicy, restarts int) bool {
 // because the context was cancelled or there is nothing to monitor (in which case
 // the service is supervised purely by its clean start and should simply wait for
 // shutdown).
-func (q *Services) monitorHealth(ctx context.Context, srv Service, updateInfo func(func(*ServiceInfo))) (bool, error) {
+func (q *Services) monitorHealth(ctx context.Context, index int, srv Service,
+	updateInfo func(func(*ServiceInfo)),
+) (bool, error) {
 	if srv.RestartPolicy.HealthFailureThreshold <= 0 || srv.Status == nil {
 		// Nothing to monitor: a clean start is not an exit, so block until the
 		// controller shuts down rather than falling through to a restart.
@@ -166,23 +180,10 @@ func (q *Services) monitorHealth(ctx context.Context, srv Service, updateInfo fu
 	for {
 		select {
 		case <-time.After(healthInterval):
-			if err := srv.Status(); err != nil {
+			if err := callProbe(srv.Status, q.reporter(index, srv.Name, SiteProbe)); err != nil {
 				healthFailures++
-				if healthFailures >= srv.RestartPolicy.HealthFailureThreshold {
-					stopErr := callStop(ctx, srv)
-					healthErr := errors.Wrap(err, "health check failed")
-
-					updateInfo(func(i *ServiceInfo) {
-						i.Error = healthErr
-						// Once shutdown has begun only the shutdown writes StopErr
-						// (spec 0008 D4); checked under infoMu, which orders it
-						// against that write.
-						if ctx.Err() == nil {
-							i.StopErr = stopErr
-						}
-					})
-
-					return true, healthErr
+				if healthFailures >= srv.RestartPolicy.HealthFailureThreshold || q.breachesAtOnce(err) {
+					return true, q.breach(ctx, index, srv, err, updateInfo)
 				}
 			} else {
 				healthFailures = 0 // Reset on success
@@ -191,6 +192,40 @@ func (q *Services) monitorHealth(ctx context.Context, srv Service, updateInfo fu
 			return false, nil
 		}
 	}
+}
+
+// breach stops a service whose Status breached and records why.
+func (q *Services) breach(ctx context.Context, index int, srv Service, err error,
+	updateInfo func(func(*ServiceInfo)),
+) error {
+	stopErr := callStop(ctx, srv, q.reporter(index, srv.Name, SiteStop))
+	healthErr := errors.Wrap(err, "health check failed")
+
+	updateInfo(func(i *ServiceInfo) {
+		i.Error = healthErr
+		// Once shutdown has begun only the shutdown writes StopErr (spec 0008
+		// D4); checked under infoMu, which orders it against that write.
+		if ctx.Err() == nil {
+			i.StopErr = stopErr
+		}
+	})
+
+	return healthErr
+}
+
+// breachesAtOnce reports whether a polled Status error ends the run whatever
+// the count: a panic is a defect, not a reading (spec 0009 D9).
+func (q *Services) breachesAtOnce(err error) bool {
+	return !q.probePanicsAsFailures && errors.Is(err, ErrPanicked)
+}
+
+// reporter reports a registered service's panics at site, or is nil.
+func (q *Services) reporter(index int, name string, site PanicSite) panicReporter {
+	if q.reporterFor == nil {
+		return nil
+	}
+
+	return q.reporterFor(index, name, site)
 }
 
 func (q *Services) start(ctx context.Context, wg *sync.WaitGroup) {
@@ -271,10 +306,23 @@ func (q *Services) supervise(ctx context.Context, index int, srv Service, wg *sy
 	q.runWithRestartPolicy(ctx, index, srv, markStarted, &cleanStart, updateInfo)
 }
 
+// callStart runs a service's start, converting a panic into the run's error.
+// The error is built inside the deferred call, so its stack is the panic's.
+func (q *Services) callStart(ctx context.Context, index int, srv Service) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Newf("controls: service %q %w: %v", srv.Name, ErrPanicked, r)
+			q.reporter(index, srv.Name, SiteStart).report(r, err)
+		}
+	}()
+
+	return srv.Start(ctx)
+}
+
 func (q *Services) runOnce(ctx context.Context, index int, srv Service, updateInfo func(func(*ServiceInfo))) {
 	updateInfo(func(i *ServiceInfo) { i.LastStarted = time.Now() })
 
-	err := srv.Start(ctx)
+	err := q.callStart(ctx, index, srv)
 
 	updateInfo(func(i *ServiceInfo) {
 		i.LastStopped = time.Now()
@@ -337,7 +385,7 @@ func (e *exhausted) Error() string   { return e.msg + ": " + e.cause.Error() }
 func (e *exhausted) Unwrap() []error { return []error{ErrRestartsExhausted, e.cause} }
 
 // exhaustedWith builds the terminal error for a cause, or is the sentinel
-// alone when there is none, which is what a health-driven exhaustion has.
+// alone when there is none.
 func exhaustedWith(msg string, cause error) error {
 	if cause == nil {
 		return ErrRestartsExhausted
@@ -394,12 +442,12 @@ func resolveRestartTimings(p *RestartPolicy) restartTimings {
 // the health error of a breach (kept apart because the Start error feeds
 // exhaustedWith, spec 0006 D2), and whether the restart loop should keep going
 // (false means terminate: graceful shutdown or a clean start with no exit).
-func (q *Services) runOnceWithRestart(ctx context.Context, srv Service, markStarted func(), cleanStart *bool,
-	updateInfo func(func(*ServiceInfo)),
+func (q *Services) runOnceWithRestart(ctx context.Context, index int, srv Service, markStarted func(),
+	cleanStart *bool, updateInfo func(func(*ServiceInfo)),
 ) (error, error, bool) {
 	updateInfo(func(i *ServiceInfo) { i.LastStarted = time.Now() })
 
-	err := srv.Start(ctx)
+	err := q.callStart(ctx, index, srv)
 
 	updateInfo(func(i *ServiceInfo) {
 		i.LastStopped = time.Now()
@@ -419,7 +467,7 @@ func (q *Services) runOnceWithRestart(ctx context.Context, srv Service, markStar
 
 		*cleanStart = true
 
-		breached, healthErr := q.monitorHealth(ctx, srv, updateInfo)
+		breached, healthErr := q.monitorHealth(ctx, index, srv, updateInfo)
 
 		// A breach noticed after the cancel is shutdown, not a failure (spec 0008
 		// D6): monitorHealth may have been inside Status when it came.
@@ -442,7 +490,7 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, index int, srv Serv
 	for {
 		runStarted := time.Now()
 
-		err, healthErr, keepGoing := q.runOnceWithRestart(ctx, srv, markStarted, cleanStart, updateInfo)
+		err, healthErr, keepGoing := q.runOnceWithRestart(ctx, index, srv, markStarted, cleanStart, updateInfo)
 		if !keepGoing {
 			return
 		}
@@ -458,7 +506,9 @@ func (q *Services) runWithRestartPolicy(ctx context.Context, index int, srv Serv
 
 		// Check if we've exhausted restarts.
 		if restartsExhausted(srv.RestartPolicy, restarts) {
-			q.reportExhausted(index, srv, err, *cleanStart, restarts, updateInfo)
+			// The health error too, so a breach's cause, a probe panic's
+			// included, reaches the terminal event (spec 0009 D12).
+			q.reportExhausted(index, srv, cmp.Or(err, healthErr), *cleanStart, restarts, updateInfo)
 
 			return
 		}
@@ -517,7 +567,7 @@ func (q *Services) stop(ctx context.Context) []Unfinished {
 	var unfinished []Unfinished
 
 	for i := len(services) - 1; i >= 0; i-- {
-		if u, ok := q.stopOne(ctx, services[i]); !ok {
+		if u, ok := q.stopOne(ctx, services[i], q.reporter(i, services[i].Name, SiteStop)); !ok {
 			unfinished = append(unfinished, u)
 		}
 	}
@@ -528,14 +578,14 @@ func (q *Services) stop(ctx context.Context) []Unfinished {
 // stopOne runs one shutdown step. The step is settled once, by whichever of the
 // stop's result and the abandonment reaches it first; the other is discarded,
 // so a stop returning after it was abandoned cannot overwrite the record.
-func (q *Services) stopOne(ctx context.Context, s Service) (Unfinished, bool) {
+func (q *Services) stopOne(ctx context.Context, s Service, report panicReporter) (Unfinished, bool) {
 	// Decided before launching, so this stop's result never competes for the
 	// record: without it, an instant stop after a slow one races an
 	// already-closed ctx.Done() and is reported abandoned at random.
 	if ctx.Err() != nil {
 		q.recordStopErr(s.Name, ErrStopAbandoned)
 
-		go func() { _ = callStop(ctx, s) }()
+		go func() { _ = callStop(ctx, s, report) }()
 
 		return Unfinished{Service: s.Name, Reason: StopUnbudgeted}, false
 	}
@@ -549,7 +599,7 @@ func (q *Services) stopOne(ctx context.Context, s Service) (Unfinished, bool) {
 	go func() {
 		defer close(done)
 
-		err := callStop(ctx, s)
+		err := callStop(ctx, s, report)
 		if settled.CompareAndSwap(false, true) {
 			stopErr = err
 			q.recordStopErr(s.Name, err)
@@ -576,18 +626,18 @@ func (q *Services) stopOne(ctx context.Context, s Service) (Unfinished, bool) {
 	return Unfinished{}, true
 }
 
-// callStop invokes a StopFunc, recovering from a panic so a misbehaving stop
-// cannot crash the shutdown sequence. fn is never nil (defaulted at registration).
-// callStop stops a service and reports how it ended.
+// callStop stops a service and reports how it ended. Stop is never nil
+// (defaulted at registration).
 //
 // A panic is contained and converted rather than swallowed. It used to be
 // swallowed here and not contained at all on the health-restart path, which
 // called Stop directly — so the same defect either vanished or killed the
 // process depending on which path reached it.
-func callStop(ctx context.Context, s Service) (err error) {
+func callStop(ctx context.Context, s Service, report panicReporter) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.Newf("controls: stopping %q panicked: %v", s.Name, r)
+			err = errors.Newf("controls: stopping %q %w: %v", s.Name, ErrPanicked, r)
+			report.report(r, err)
 		}
 	}()
 
@@ -597,7 +647,7 @@ func callStop(ctx context.Context, s Service) (err error) {
 		return s.StopErr(ctx)
 	}
 
-	return callStopFunc(ctx, s.Stop)
+	return callStopFunc(ctx, s.Stop, report)
 }
 
 // callStopFunc runs a plain StopFunc, which cannot report anything, and
@@ -606,10 +656,11 @@ func callStop(ctx context.Context, s Service) (err error) {
 // It exists because a Supervisor's Child carries a bare StopFunc: a child is
 // not a Service and giving it one to satisfy this signature would be the tail
 // wagging the dog.
-func callStopFunc(ctx context.Context, fn StopFunc) (err error) {
+func callStopFunc(ctx context.Context, fn StopFunc, report panicReporter) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.Newf("controls: stop panicked: %v", r)
+			err = errors.Newf("controls: stop %w: %v", ErrPanicked, r)
+			report.report(r, err)
 		}
 	}()
 
@@ -623,10 +674,11 @@ func callStopFunc(ctx context.Context, fn StopFunc) (err error) {
 // callProbe calls fn and returns any error it produces. If fn panics, the panic
 // value is converted to an error so that a misbehaving StatusFunc or ProbeFunc
 // cannot crash the server.
-func callProbe(fn func() error) (err error) {
+func callProbe(fn func() error, report panicReporter) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.Newf("probe panicked: %v", r)
+			err = errors.Newf("probe %w: %v", ErrPanicked, r)
+			report.report(r, err)
 		}
 	}()
 
@@ -651,14 +703,14 @@ func (q *Services) status() HealthReport {
 		Services:       make([]ServiceStatus, 0, len(services)),
 	}
 
-	for _, s := range services {
+	for i, s := range services {
 		status := ServiceStatus{
 			Name:   s.Name,
 			Status: "OK",
 		}
 
 		if s.Status != nil {
-			if err := callProbe(s.Status); err != nil {
+			if err := callProbe(s.Status, q.reporter(i, s.Name, SiteProbe)); err != nil {
 				status.Status = "ERROR"
 				status.Error = err.Error()
 				report.OverallHealthy = false
@@ -679,17 +731,19 @@ func (q *Services) liveness() HealthReport {
 		Services:       make([]ServiceStatus, 0, len(services)),
 	}
 
-	for _, s := range services {
+	for i, s := range services {
 		status := ServiceStatus{
 			Name:   s.Name,
 			Status: "OK",
 		}
 
+		probed := q.reporter(i, s.Name, SiteProbe)
+
 		var err error
 		if s.Liveness != nil {
-			err = callProbe(s.Liveness)
+			err = callProbe(s.Liveness, probed)
 		} else if s.Status != nil {
-			err = callProbe(s.Status)
+			err = callProbe(s.Status, probed)
 		}
 
 		if err != nil {
@@ -712,17 +766,19 @@ func (q *Services) readiness() HealthReport {
 		Services:       make([]ServiceStatus, 0, len(services)),
 	}
 
-	for _, s := range services {
+	for i, s := range services {
 		status := ServiceStatus{
 			Name:   s.Name,
 			Status: "OK",
 		}
 
+		probed := q.reporter(i, s.Name, SiteProbe)
+
 		var err error
 		if s.Readiness != nil {
-			err = callProbe(s.Readiness)
+			err = callProbe(s.Readiness, probed)
 		} else if s.Status != nil {
-			err = callProbe(s.Status)
+			err = callProbe(s.Status, probed)
 		}
 
 		if err != nil {

@@ -66,7 +66,9 @@ func TestExhaustionAfterFailedRunsCarriesTheSentinelAndTheLastError(t *testing.T
 	require.Equal(t, "max restarts exceeded: boom", info.Error.Error())
 }
 
-func TestHealthDrivenExhaustionIsTheSentinelAlone(t *testing.T) {
+// A health-driven exhaustion carries its last breach, as a failed run's carries
+// its error (spec 0009 D12).
+func TestHealthDrivenExhaustionCarriesTheBreach(t *testing.T) {
 	t.Parallel()
 
 	c, errs := subscribedController(t)
@@ -88,7 +90,7 @@ func TestHealthDrivenExhaustionIsTheSentinelAlone(t *testing.T) {
 	c.Wait()
 
 	require.ErrorIs(t, got, controls.ErrRestartsExhausted)
-	require.Equal(t, "max restarts exceeded", got.Error(), "with no last error the sentinel stands alone")
+	require.Equal(t, "max restarts exceeded: health check failed: unwell", got.Error())
 }
 
 func TestAFailureWithNoPolicyIsNotExhaustion(t *testing.T) {

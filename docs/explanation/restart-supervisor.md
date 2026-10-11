@@ -113,8 +113,12 @@ well-behaved:
   hold a restart back. This is the D9 property discussed in
   [Concurrency and shutdown correctness](concurrency.md).
 - **It never carries `nil`.** A health-threshold breach is reported with its
-  health error, `health check failed: …`, and is not counted as the run's error,
-  so a health-driven exhaustion is still the bare sentinel.
+  health error, `health check failed: …`, and an exhaustion by breaches carries
+  the last one: `max restarts exceeded: health check failed: …`.
+- **A panic is a failure like an error.** A panicking start or polled `Status`
+  is recovered, and its error satisfies `errors.Is(err, ErrPanicked)` on every
+  event, with the panic site's stack on the failure's log line. It is never a
+  valid error, and a polled `Status` panic breaches at once.
 - **Shutdown is not a failure.** A failure noticed after shutdown has cancelled
   the services' context, including a health breach landing during a `Status`
   call, is not reported.

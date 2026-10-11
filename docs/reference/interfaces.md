@@ -54,7 +54,7 @@ services and mock the controller](../how-to/testing.md).
 |---|---|---|
 | `ControllerOpt` | `func(Configurable)` | Anyone, but a third-party option can only call the six `Configurable` setters. `WithValidError` reaches further through an unexported interface, so its behaviour cannot be reproduced outside the package. |
 | `ServiceOption` | `func(*Service)` | Anyone. `Service` and all its fields are exported, so you can write your own service options; `func(s *controls.Service) { s.Name = ... }` is legal. |
-| `SupervisorOption` | `func(*Supervisor)` | Anyone can write the signature, but `Supervisor` has no exported fields, so only the package's own `WithOnFailure` can do anything with it. |
+| `SupervisorOption` | `func(*Supervisor)` | Anyone can write the signature, but `Supervisor` has no exported fields, so only the package's own `WithOnFailure` and `WithOnChildPanic` can do anything with it. |
 
 ## Function types
 

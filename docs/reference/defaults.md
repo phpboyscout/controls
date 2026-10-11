@@ -14,6 +14,8 @@ rest are internal values applied when you leave a field at zero.
 | Signal channel buffer | 1 slot | not configurable | — |
 | Message and error channels | unbuffered | `SetMessageChannel` / `SetErrorsChannel`, before `Start` only | The controller reads neither error channel; it logs each failure where it happens. Its own error channel is fed once `Errors()` is called and closed before `Done`; an installed one is never closed. |
 | Valid-error predicate | none: every non-nil `StartFunc` error is a failure | `WithValidError(fn)` | — |
+| Polled `Status` panic | a health breach at once | `WithProbePanicsAsFailures()` | — |
+| Panic callback queue | one report per service or check and site, the latest with a count | `WithOnPanic(fn)` | Without the option no queue exists and no goroutine runs. |
 | Lifecycle state at construction | `NeverStarted` | — | Registration is only honoured in this state. A `Controller` built without `NewController` holds the zero value, which `GetState` reports as `Unknown`. |
 
 ## Service defaults
@@ -60,6 +62,7 @@ time: 1s, 2s, 4s, 8s, 16s, 30s, 30s, … Because each run is far shorter than th
 |---|---|---|---|
 | `Failures()` channel | not created | calling `Failures()` | A consumer that never calls it never has a queue filling behind it. Created on first call, bounded at `DefaultFailureBufferSize` = **16**, and never closed. |
 | Failure callback queue | unbounded, ordered | `WithOnFailure(fn)` | Without the option no queue exists and no goroutine runs. |
+| Child panic callback queue | one report per child and site, the latest with a count | `WithOnChildPanic(fn)` | Without the option no queue exists and no goroutine runs. |
 | `Child.RestartPolicy` | `nil`, run once, outcome final | the field | `nil` is **never restart**. A non-nil policy with `MaxRestarts <= 0` is **unlimited**, the opposite reading. |
 | `Child.ValidError` | `nil`, no error is exempt | the field | The child equivalent of a controller's `WithValidError`, per child rather than per supervisor. |
 | `Child.Stop` | no-op | the field | Cancelling the context passed to `Start` is the primary mechanism; `Stop` is the extra one. |

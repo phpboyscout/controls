@@ -232,9 +232,12 @@ supervised is worse than refusing it. `Stop` before `Start` returns at once rath
 a done channel no goroutine will close. `Stop` and `Detach` are bounded by their context across
 `Child.Stop` as well as the child's own goroutine.
 
-**A child's `Start` is recovered; a service's is not.** Deliberate asymmetry: a child is
-caller-supplied code the supervisor launched, so the same line `callStop` and `callProbe` already
-draw applies. A panic is still a defect — counted separately from an error return.
+**Every callback the controller or a Supervisor runs is recovered on the goroutine that called it**
+(spec 0009): a start, stop, probe or health check. The panic wraps `ErrPanicked` and is a failure
+like an error, never valid, and cancelled only once shutdown has begun; a polled probe's panic
+breaches at once. The boundaries are the goroutines a start spawns and a `ValidErrorFunc`, which
+is called unrecovered. A new call site for caller code goes through `callStart`, `callStop`,
+`callStopFunc` or `callProbe`, never a direct call.
 
 **Failure notification runs on its own goroutine, and nothing joins it.** Not for throughput: it
 keeps failures ordered and means a callback calling back into the supervisor cannot deadlock. That

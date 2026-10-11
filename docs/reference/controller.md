@@ -48,6 +48,8 @@ apply one after construction that is safe once the controller is running; see
 | `WithShutdownTimeout` | `WithShutdownTimeout(d time.Duration)` | `DefaultShutdownTimeout` (5s) | Bounds the **whole** stop phase, not each callback. A zero or negative `d` is not "use the default": it produces an already-expired budget, so stop callbacks are abandoned the instant they are launched and may never run at all. |
 | `WithSignals` | `WithSignals()` | no signal handling | Creates a signal channel with a one-slot buffer. `signal.Notify` for `SIGINT`/`SIGTERM` is registered in `Start`, not at construction, and detached again at shutdown. Do not use it under a CLI framework that already turns signals into cancellation. |
 | `WithOnEvent` | `WithOnEvent(fn func(ServiceEvent))` | none | Delivers every terminal service failure, and the latest of each run of retries, to `fn` on a goroutine of its own, in order. A retry waiting behind a slow `fn` is replaced by a newer one. `fn` may call `Stop`. A panic in it is recovered and logged. See [Events](#service-events). |
+| `WithOnPanic` | `WithOnPanic(fn func(PanicReport))` | none | Delivers every panic the controller recovers to `fn` on a goroutine of its own, from `Start` until shutdown's cutoff. It is beside the failure the panic causes, never instead of it. See [Panics](#panics). |
+| `WithProbePanicsAsFailures` | `WithProbePanicsAsFailures()` | a polled `Status` panic breaches at once | Counts a panic in a `WithStatus` probe polled by a restart policy as one failure towards `HealthFailureThreshold`. Nothing else changes. |
 | `WithValidError` | `WithValidError(fn func(error) bool)` | none | A `StartFunc` error for which `fn` returns true is classified as a normal end of run: not restarted, not counted, not forwarded on the error channel. Applies to every registered service; there is no per-service variant. (A `Supervisor`'s `Child` has its own `ValidError` field.) |
 
 ## Lifecycle methods
@@ -135,7 +137,7 @@ type ServiceEvent struct {
 | `Kind` | When | `Err` |
 |---|---|---|
 | `EventRetrying` | A run failed and the restart policy will run it again, including after a health-threshold breach. | The run's error, or `health check failed: …` for a breach. |
-| `EventFailed` | Terminal. The service started cleanly at least once, then failed and exhausted its policy. | Satisfies `errors.Is(err, ErrRestartsExhausted)`; after health breaches it is the sentinel alone. |
+| `EventFailed` | Terminal. The service started cleanly at least once, then failed and exhausted its policy. | Satisfies `errors.Is(err, ErrRestartsExhausted)` and the last error beside it: after health breaches, `max restarts exceeded: health check failed: …`. |
 | `EventUnableToStart` | Terminal. The service never started cleanly and will not be tried again, including a service with no restart policy failing once. | As above, or the `StartFunc`'s error for a service with no policy. |
 
 `Restarts` is the consecutive-restart count, which resets after a healthy run;
@@ -148,6 +150,41 @@ A `WithOnEvent` callback can run after the controller reaches `Stopped`, and one
 still running at the deadline can outlive `Done`, because a callback cannot be
 interrupted. A callback that calls `Wait` or blocks on `Done` holds up its own
 drain until the budget expires.
+
+A failure caused by a panic has an `Err` satisfying `errors.Is(err, ErrPanicked)`,
+on the event, the error channel and `ServiceInfo.Error` alike, and its log line
+carries a `stack` attribute naming the line that panicked.
+
+## Panics
+
+Every panic the controller recovers, in a start, stop or probe, or in a
+standalone health check, is an error wrapping `ErrPanicked`, with the panic
+site's stack as its `errors.OriginStack`. `WithOnPanic` also hands each one to a
+callback, for an error tracker:
+
+```go
+type PanicReport struct {
+	Service string    // the service or health check that panicked
+	Site    PanicSite // SiteStart, SiteStop, SiteProbe or SiteHealthCheck
+	Value   any       // the recovered value
+	Err     error     // wraps ErrPanicked
+	Repeats int       // panics merged into this report while it waited
+}
+```
+
+- **It runs from `Start` until shutdown's cutoff.** A panic before `Start`, or in
+  a probe called during the drain or after `Done`, is still recovered and still
+  reported unhealthy, but is not delivered.
+- **Repeats merge.** While a report waits behind a busy callback, a newer panic
+  from the same service, or health check, at the same site replaces its `Value`
+  and `Err` and adds one to `Repeats`. A tracker sees the latest panic at each
+  site with a count of how many it stands for.
+- **It is drained like the event callback**, within the remaining budget after
+  the error channel and `WithOnEvent`, and what is left at the deadline is logged
+  as undelivered with `consumer=WithOnPanic`.
+- A callback may call `Stop`. A panic in it is recovered and logged, never
+  reported.
+- Nothing orders a report against the event or log line for the same failure.
 
 ## The shutdown outcome
 
@@ -217,6 +254,7 @@ registration receiving signals nobody reads.
 |---|---|---|
 | `ErrShutdown` | `errors.NewSentinel("controls.shutdown", "controller shutdown")` | The cause attached to the controller context for every stop the controller drives. Test for it with `errors.Is(context.Cause(ctx), controls.ErrShutdown)`. |
 | `ErrRestartsExhausted` | `errors.NewSentinel("controls.restarts_exhausted", "max restarts exceeded")` | Inside the error a service leaves on `ServiceInfo.Error`, `Errors()` and its terminal `ServiceEvent`, and a child on `Failure.Err`, when it has used up its restart policy. `errors.Is` matches it and the last error beside it. |
+| `ErrPanicked` | `errors.NewSentinel("controls.panicked", "panicked")` | Inside every error converted from a recovered panic, a child's included. The messages read as before: `probe panicked: <value>`. |
 | `ErrStopAbandoned` | `errors.NewSentinel("controls.stop_abandoned", "stop not awaited within the shutdown budget")` | On `ServiceInfo.StopErr` for a stop abandoned at the deadline, or not awaited because the budget had gone. |
 | `DefaultShutdownTimeout` | `5 * time.Second` | Applied when `WithShutdownTimeout` is not passed. |
 | `DefaultRestartResetInterval` | `30 * time.Second` | Applied when `RestartPolicy.RestartResetInterval` is zero. |
@@ -224,6 +262,7 @@ registration receiving signals nobody reads.
 | `CauseStop`, `CauseSignal`, `CauseParent`, `CauseGaveUp`, `CauseCompleted` | `StopCause` values | What started a shutdown; the last two are reserved. |
 | `StopAbandoned`, `StopUnbudgeted`, `StopFailed`, `SupervisorAbandoned` | `UnfinishedReason` values | Why a shutdown step did not finish. |
 | `EventRetrying`, `EventFailed`, `EventUnableToStart` | `EventKind` values | The kinds of `ServiceEvent`. |
+| `SiteStart`, `SiteStop`, `SiteProbe`, `SiteHealthCheck` | `PanicSite` values | Where a recovered panic was called from. |
 | `NeverStarted`, `Running`, `UnableToStart`, `Stopping`, `Stopped` | `State` values | The lifecycle states, in order. |
 | `Unknown` | `State` value | Not part of that sequence: the state could not be determined. |
 

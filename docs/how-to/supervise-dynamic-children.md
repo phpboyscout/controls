@@ -88,8 +88,10 @@ A child's `Start` returning is classified by the same rule a service's is
 | `context.Canceled`, or anything at all once the supervisor's context is cancelled | treats it as a clean cancellation. No restart, no `Failure` |
 | any other error | a failure: recorded, counted against the restart policy, and restarted or reported terminal |
 
-A panic is converted to an error and counted separately, so `Failure.Panicked`
-and `ChildStatus.Panics` tell a bug from a capacity problem.
+A panic is converted to an error wrapping `controls.ErrPanicked` and counted
+separately, so `Failure.Panicked`, `errors.Is(f.Err, controls.ErrPanicked)` and
+`ChildStatus.Panics` tell a bug from a capacity problem. A panic is never a
+`ValidError` match.
 
 ## What `Health` reports
 
@@ -115,7 +117,7 @@ This is the difference that matters, and it is deliberate:
 | Membership | fixed, before `Start` | dynamic |
 | Its probe failing | sets `OverallHealthy: false` for the **whole process** | never affects the process |
 | Shutdown | reverse registration order | concurrent |
-| Panic in its start function | **crashes the process** | recovered, counted, restarted |
+| Panic in its start function | recovered, counted, restarted | recovered, counted, restarted |
 
 **Registered means required.** A registered service that reports unready takes
 the process out of rotation. A supervised child is not a requirement, so
@@ -139,7 +141,7 @@ controls.NewSupervisor(controls.WithOnFailure(func(f controls.Failure) { ... }))
 for {
     select {
     case f := <-sup.Failures():
-        if f.Panicked {
+        if errors.Is(f.Err, controls.ErrPanicked) {
             alert(f)   // a bug, not a capacity problem
         }
         reattachWithBackoff(f.Name)

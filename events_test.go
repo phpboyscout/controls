@@ -191,7 +191,7 @@ func TestEventsAfterHealthBreaches(t *testing.T) {
 	events := got.all()
 	require.Equal(t, []controls.EventKind{controls.EventRetrying, controls.EventFailed}, got.kinds())
 	require.ErrorContains(t, events[0].Err, "health check failed")
-	require.Equal(t, controls.ErrRestartsExhausted.Error(), events[1].Err.Error())
+	require.Equal(t, "max restarts exceeded: health check failed: unhealthy", events[1].Err.Error())
 	require.Equal(t, 1, events[1].Restarts)
 }
 

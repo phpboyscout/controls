@@ -110,7 +110,8 @@ type State string
 type Message string
 
 // StartFunc is the callback invoked to start a service. It receives a context
-// that is cancelled when the controller shuts down.
+// that is cancelled when the controller shuts down. A panic in it is recovered
+// and is the service's failure; one on a goroutine it starts is not.
 //
 // # A restart calls this again, so what the closure captured is shared
 //

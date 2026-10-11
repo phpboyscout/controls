@@ -67,7 +67,9 @@ type Controller struct {
 	outcome        Outcome
 	outcomeWritten bool
 
-	onEvent func(ServiceEvent)
+	onEvent               func(ServiceEvent)
+	onPanic               func(PanicReport)
+	probePanicsAsFailures bool
 
 	// subMu orders subscribing to the error channel against shutdown's cutoff,
 	// after which no forwarder can start (spec 0008 D9).
@@ -75,8 +77,9 @@ type Controller struct {
 	subscribed  bool
 	subStarted  bool
 	subFinished bool
-	errsFwd     *forwarder
-	eventsFwd   *forwarder
+	errsFwd     *eventForwarder
+	eventsFwd   *eventForwarder
+	panicsFwd   *panicForwarder
 }
 
 func (c *Controller) GetContext() context.Context {
@@ -228,7 +231,12 @@ func (c *Controller) RegisterHealthCheck(check HealthCheck) error {
 		return errors.Newf("duplicate health check name: %q", check.Name)
 	}
 
-	c.healthChecks[check.Name] = &healthCheckEntry{check: check}
+	entry := &healthCheckEntry{check: check}
+	if c.onPanic != nil {
+		entry.onPanic = c.panicReporter(entry, check.Name, SiteHealthCheck)
+	}
+
+	c.healthChecks[check.Name] = entry
 	c.logger.Debug("Registered health check", "name", check.Name)
 
 	return nil
@@ -338,6 +346,7 @@ func (c *Controller) Start() {
 	// Propagate the valid-error predicate to the supervisor before any service
 	// run can be classified.
 	c.services.validError = c.validError
+	c.services.probePanicsAsFailures = c.probePanicsAsFailures
 	c.services.onUnableToStart = c.markUnableToStart
 	c.services.publish = c.publish
 
@@ -834,11 +843,16 @@ func (c *Controller) setValidError(fn ValidErrorFunc) {
 // then queued for each consumer without blocking. Nothing reads a channel to
 // log, so nothing competes with a consumer for it (spec 0008 D7, issue 19).
 func (c *Controller) publish(index int, ev ServiceEvent) {
-	c.logger.Error(failureMessage(ev.Kind),
-		"service_name", ev.Service, "kind", ev.Kind, "restarts", ev.Restarts, "error", ev.Err)
+	attrs := []any{"service_name", ev.Service, "kind", ev.Kind, "restarts", ev.Restarts, "error", ev.Err}
+	// The error's own LogValue omits its stack (spec 0009 D8).
+	if errors.Is(ev.Err, ErrPanicked) {
+		attrs = append(attrs, "stack", errors.OriginStack(ev.Err).String())
+	}
+
+	c.logger.Error(failureMessage(ev.Kind), attrs...)
 
 	c.subMu.Lock()
-	fwds := c.activeForwarders()
+	fwds := c.eventForwarders()
 	c.subMu.Unlock()
 
 	for _, f := range fwds {
@@ -846,18 +860,56 @@ func (c *Controller) publish(index int, ev ServiceEvent) {
 	}
 }
 
-// activeForwarders lists the forwarders that exist, the channel's first so it
-// gets the drain budget first. Callers hold subMu.
-func (c *Controller) activeForwarders() []*forwarder {
-	var fwds []*forwarder
+// eventForwarders lists the event forwarders that exist, the channel's first.
+// Callers hold subMu.
+func (c *Controller) eventForwarders() []*eventForwarder {
+	var fwds []*eventForwarder
 
-	for _, f := range []*forwarder{c.errsFwd, c.eventsFwd} {
+	for _, f := range []*eventForwarder{c.errsFwd, c.eventsFwd} {
 		if f != nil {
 			fwds = append(fwds, f)
 		}
 	}
 
 	return fwds
+}
+
+// activeForwarders lists every forwarder that exists, in the order the drain
+// budget goes to them. Callers hold subMu.
+func (c *Controller) activeForwarders() []drainable {
+	var fwds []drainable
+
+	for _, f := range c.eventForwarders() {
+		fwds = append(fwds, f)
+	}
+
+	if c.panicsFwd != nil {
+		fwds = append(fwds, c.panicsFwd)
+	}
+
+	return fwds
+}
+
+// reportPanic is the sink every recover site reports through. A panic before
+// Start or after the cutoff finds no open forwarder and is not reported (spec
+// 0009 D11).
+func (c *Controller) reportPanic(key panicKey, r PanicReport) {
+	c.subMu.Lock()
+	f := c.panicsFwd
+	c.subMu.Unlock()
+
+	if f != nil {
+		f.enqueue(key, r)
+	}
+}
+
+// panicReporter reports reporter's panics at site under name.
+func (c *Controller) panicReporter(reporter any, name string, site PanicSite) panicReporter {
+	key := panicKey{reporter: reporter, site: site}
+
+	return func(value any, err error) {
+		c.reportPanic(key, PanicReport{Service: name, Site: site, Value: value, Err: err})
+	}
 }
 
 func failureMessage(kind EventKind) string {
@@ -880,7 +932,7 @@ func (c *Controller) startForwarders() {
 	c.subStarted = true
 
 	if c.onEvent != nil {
-		c.eventsFwd = newForwarder(&forwarder{
+		c.eventsFwd = newEventForwarder(&eventForwarder{
 			consumer: "WithOnEvent",
 			deliver: func(ev ServiceEvent, _ <-chan struct{}) bool {
 				c.invokeOnEvent(ev)
@@ -892,6 +944,10 @@ func (c *Controller) startForwarders() {
 
 	if c.subscribed || c.errs != c.ownErrs {
 		c.startErrorsForwarder()
+	}
+
+	if c.onPanic != nil {
+		c.panicsFwd = newPanicForwarder("WithOnPanic", c.invokeOnPanic)
 	}
 }
 
@@ -909,7 +965,7 @@ func (c *Controller) startErrorsForwarder() {
 		onExit = func() { close(out) }
 	}
 
-	c.errsFwd = newForwarder(&forwarder{
+	c.errsFwd = newEventForwarder(&eventForwarder{
 		consumer:          "Errors",
 		awaitAfterAbandon: true,
 		deliver: func(ev ServiceEvent, abandon <-chan struct{}) bool {
@@ -936,10 +992,22 @@ func (c *Controller) invokeOnEvent(ev ServiceEvent) {
 	c.onEvent(ev)
 }
 
+// invokeOnPanic recovers a panicking callback and logs it. It is never
+// reported, so a broken callback cannot feed itself (spec 0009 D11).
+func (c *Controller) invokeOnPanic(r PanicReport) {
+	defer func() {
+		if p := recover(); p != nil {
+			c.logger.Error("WithOnPanic callback panicked", "service_name", r.Service, "site", r.Site, "panic", p)
+		}
+	}()
+
+	c.onPanic(r)
+}
+
 // cutOffSubscriptions refuses further events and subscriptions, and closes the
 // controller's own channel when no forwarder sends on it. It returns the
 // forwarders still to drain.
-func (c *Controller) cutOffSubscriptions() []*forwarder {
+func (c *Controller) cutOffSubscriptions() []drainable {
 	c.subMu.Lock()
 	defer c.subMu.Unlock()
 
@@ -960,25 +1028,17 @@ func (c *Controller) cutOffSubscriptions() []*forwarder {
 // drain waits for each forwarder to empty its queue within the remaining
 // budget, then abandons what is left. A forwarder that honours abandonment is
 // still waited for, so nothing is sent after Done (spec 0008 D8).
-func (c *Controller) drain(ctx context.Context, fwds []*forwarder) {
+func (c *Controller) drain(ctx context.Context, fwds []drainable) {
 	for _, f := range fwds {
 		select {
-		case <-f.exited:
+		case <-f.finished():
 			continue
 		case <-ctx.Done():
 		}
 
-		left := f.abandonDelivery()
-
-		if f.awaitAfterAbandon {
-			<-f.exited
-
-			left += f.dropped
-		}
-
-		if left > 0 {
+		if left := f.abandonDelivery(); left > 0 {
 			c.logger.Warn("events undelivered at the shutdown deadline",
-				"consumer", f.consumer, "count", left)
+				"consumer", f.consumerName(), "count", left)
 		}
 	}
 }
@@ -1026,6 +1086,12 @@ func NewController(ctx context.Context, opts ...ControllerOpt) *Controller {
 
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	// Wired once, here, so nothing Start writes is read by a probe racing it
+	// (spec 0009 D11).
+	if c.onPanic != nil {
+		c.services.reporterFor = c.panicReporter
 	}
 
 	// OS-signal registration is deferred to Start (startSignalHandler), where it is

@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync/atomic"
 	"time"
+
+	"gitlab.com/phpboyscout/go/errors"
 )
 
 const defaultCheckTimeout = 5 * time.Second
@@ -18,6 +20,8 @@ type healthCheckEntry struct {
 	check      HealthCheck
 	lastResult atomic.Pointer[CheckResult]
 	cancel     context.CancelFunc
+	// onPanic is set at registration and never changed (spec 0009 D11).
+	onPanic panicReporter
 }
 
 // runCheck executes the health check with the configured timeout and stores the
@@ -64,7 +68,7 @@ func (e *healthCheckEntry) runCheck(parentCtx context.Context) {
 	done := make(chan CheckResult, 1)
 
 	go func() {
-		done <- e.check.Check(ctx)
+		done <- e.callCheck(ctx)
 	}()
 
 	var result CheckResult
@@ -81,6 +85,20 @@ func (e *healthCheckEntry) runCheck(parentCtx context.Context) {
 
 	result.Timestamp = time.Now()
 	e.lastResult.Store(&result)
+}
+
+// callCheck runs the check, and reports a panic in it as an unhealthy result
+// (spec 0009 D4). CheckResult has no error, so the message carries it.
+func (e *healthCheckEntry) callCheck(ctx context.Context) (result CheckResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			err := errors.Newf("health check %w: %v", ErrPanicked, r)
+			result = CheckResult{Status: CheckUnhealthy, Message: err.Error()}
+			e.onPanic.report(r, err)
+		}
+	}()
+
+	return e.check.Check(ctx)
 }
 
 // timedOutOrCancelled names why a check produced no result, distinguishing the

@@ -17,11 +17,11 @@ func retrying(service string, restarts int) ServiceEvent {
 
 // heldForwarder delivers into a channel the test reads, so nothing is claimed
 // until the test asks.
-func heldForwarder(t *testing.T) (*forwarder, chan ServiceEvent) {
+func heldForwarder(t *testing.T) (*eventForwarder, chan ServiceEvent) {
 	t.Helper()
 
 	out := make(chan ServiceEvent)
-	f := newForwarder(&forwarder{deliver: func(ev ServiceEvent, abandon <-chan struct{}) bool {
+	f := newEventForwarder(&eventForwarder{deliver: func(ev ServiceEvent, abandon <-chan struct{}) bool {
 		select {
 		case out <- ev:
 			return true
@@ -48,7 +48,7 @@ func heldForwarder(t *testing.T) (*forwarder, chan ServiceEvent) {
 
 // holdInSend has the forwarder claim ev and wait in its send, unread, so
 // whatever is enqueued next stays queued.
-func holdInSend(t *testing.T, f *forwarder, ev ServiceEvent) {
+func holdInSend(t *testing.T, f *eventForwarder, ev ServiceEvent) {
 	t.Helper()
 
 	f.enqueue(len(t.Name()), ev)
@@ -111,7 +111,7 @@ func TestMergingIsPerRegistrationIndex(t *testing.T) {
 	queued := make([]ServiceEvent, 0, len(f.queue))
 
 	for _, q := range f.queue {
-		queued = append(queued, q.event)
+		queued = append(queued, q.item)
 	}
 	f.mu.Unlock()
 

@@ -55,6 +55,8 @@ type Supervisor struct {
 	stopped chan struct{}
 
 	onFailure   func(Failure)
+	onPanic     func(PanicReport)
+	panicsFwd   *panicForwarder
 	queue       []Failure
 	queueWake   chan struct{}
 	queueClosed bool
@@ -127,6 +129,14 @@ type SupervisorOption func(*Supervisor)
 // callback load-bearing, synchronous and re-entrant.
 func WithOnFailure(fn func(Failure)) SupervisorOption {
 	return func(s *Supervisor) { s.onFailure = fn }
+}
+
+// WithOnChildPanic registers a callback for every panic recovered in a child's
+// Start or Stop, from Start until Stop closes the queue. Like [WithOnFailure],
+// it runs on a goroutine Stop does not wait for, so it may call Stop; while it
+// is busy, repeats at one child and site merge into the latest with a count.
+func WithOnChildPanic(fn func(PanicReport)) SupervisorOption {
+	return func(s *Supervisor) { s.onPanic = fn }
 }
 
 // NewSupervisor returns a supervisor with no children.
@@ -291,6 +301,10 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		go s.dispatchLoop()
 	}
 
+	if s.onPanic != nil {
+		s.panicsFwd = newPanicForwarder("WithOnChildPanic", s.invokeOnPanic)
+	}
+
 	for _, name := range s.order {
 		s.launch(sctx, s.children[name])
 	}
@@ -448,7 +462,7 @@ func (s *Supervisor) stopChild(ctx context.Context, c *supervisedChild) {
 		go func() {
 			defer close(c.stopDone)
 
-			_ = callStopFunc(ctx, c.spec.Stop)
+			_ = callStopFunc(ctx, c.spec.Stop, s.reporter(c, SiteStop))
 		}()
 	})
 
@@ -563,7 +577,8 @@ func (s *Supervisor) runChildOnce(ctx context.Context, c *supervisedChild) (err 
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = true
-			err = errors.Newf("controls: child %q panicked: %v", c.spec.Name, r)
+			err = errors.Newf("controls: child %q %w: %v", c.spec.Name, ErrPanicked, r)
+			s.reporter(c, SiteStart).report(r, err)
 		}
 	}()
 
@@ -661,7 +676,13 @@ func (s *Supervisor) closeQueue() {
 	s.mu.Lock()
 	s.queueClosed = true
 	wake := s.queueWake
+	panics := s.panicsFwd
 	s.mu.Unlock()
+
+	// Closed, never joined: a callback may be the caller of this Stop.
+	if panics != nil {
+		panics.closeAdmission()
+	}
 
 	if wake == nil {
 		return
@@ -671,6 +692,33 @@ func (s *Supervisor) closeQueue() {
 	case wake <- struct{}{}:
 	default:
 	}
+}
+
+// reporter reports a child's panics at site, or is nil without
+// WithOnChildPanic.
+func (s *Supervisor) reporter(c *supervisedChild, site PanicSite) panicReporter {
+	if s.onPanic == nil {
+		return nil
+	}
+
+	key := panicKey{reporter: c, site: site}
+
+	return func(value any, err error) {
+		s.mu.Lock()
+		f := s.panicsFwd
+		s.mu.Unlock()
+
+		if f != nil {
+			f.enqueue(key, PanicReport{Service: c.spec.Name, Site: site, Value: value, Err: err})
+		}
+	}
+}
+
+// invokeOnPanic discards a panic in the callback, as invoke does.
+func (s *Supervisor) invokeOnPanic(r PanicReport) {
+	defer func() { _ = recover() }()
+
+	s.onPanic(r)
 }
 
 // copyRestartPolicy takes the caller's policy by value, as WithRestartPolicy

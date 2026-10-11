@@ -49,21 +49,30 @@ and one registered after `Start` that never ran at all. `controls` does not
 inspect goroutine liveness. Give a service a probe that checks something real if
 you want its report entry to mean anything.
 
-## It does not recover panics in your start callbacks or standalone checks
+## It cannot recover a panic on a goroutine your callback started
 
-Panic recovery is deliberately partial, and the boundaries are not symmetrical:
+Every callback the controller or a `Supervisor` calls is recovered on the
+goroutine that called it, and the panic becomes an error wrapping
+`ErrPanicked` (spec 0009):
 
 | Callback | Panic behaviour |
 |---|---|
+| `WithStart` | recovered; the service's failure, handled by its restart policy like an error. With no policy it is `UnableToStart` |
 | `WithStop` / `WithStopErr` | recovered; recorded on `ServiceInfo.StopErr`, and shutdown continues with the next service |
 | `WithStatus` / `WithLiveness` / `WithReadiness`, called while a report is built | recovered; reported as `probe panicked: <value>` |
-| `WithStart` | **not recovered: the process crashes** |
+| `WithStatus`, polled by the restart supervisor | recovered; a health breach at once, or one failure under `WithProbePanicsAsFailures` |
+| `HealthCheck.Check` | recovered; reports unhealthy, `health check panicked: <value>` |
 | `Child.Start`, run by a `Supervisor` | recovered; counted, and fed to the restart policy |
 | `Child.Stop` | recovered |
-| `WithStatus`, polled by the restart supervisor | **not recovered: the process crashes** |
-| `HealthCheck.Check` | **not recovered: the process crashes** |
 
-Recover inside your own function wherever the work can panic.
+Two things remain outside it. Go recovers a panic only on the goroutine that
+panicked, so a `StartFunc` that launches a server goroutine and returns has
+handed that goroutine to Go: recover inside it. And concurrent map writes, stack
+exhaustion and running out of memory are fatal runtime errors, not panics, so
+nothing recovers them.
+
+A `WithValidError` predicate is called unrecovered, on the supervisor goroutine,
+so it must not panic.
 
 ## It cannot be restarted, and it cannot be reconfigured while running
 
