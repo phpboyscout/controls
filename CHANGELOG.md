@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.8.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.1)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.0...v0.8.1)
+
+### Other
+
+- deliver a Supervisor's failures through the shared forwarder ([818afec](https://gitlab.com/phpboyscout/go/controls/-/commit/818afecae44bb1bd745477eb5c913fe0936d8fb6))
+
 ## [v0.8.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.7.1...v0.8.0)
