@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.8.2](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.2)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.1...v0.8.2)
+
+### Notes
+
+- A clean shutdown no longer logs at warn. "Stopping Services" and the first "received signal" are now info, and
+  "Stopping Services" carries a cause attribute (stop, signal, parent, gave_up or completed). An alert keyed on those
+  warn lines should read Outcome.Cause, or that attribute, instead.
+
+### Bug Fixes
+
+- log a clean shutdown at info, not warn ([70aca5b](https://gitlab.com/phpboyscout/go/controls/-/commit/70aca5b56cc1d74203840b4d5dfaf09cf452a75c))
+
 ## [v0.8.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.1)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.0...v0.8.1)
