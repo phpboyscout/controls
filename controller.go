@@ -488,7 +488,7 @@ func (c *Controller) startSignalHandler() {
 	go func() {
 		select {
 		case sig := <-c.Signals():
-			c.logger.Warn("received signal", "signal", sig)
+			c.logger.Info("received signal", "signal", sig)
 
 			if !c.stopFor(trigger{cause: CauseSignal, signal: sig}) {
 				c.logger.Warn("signal received, but not in expected state, unable to continue", "current_state", c.GetState())
@@ -549,12 +549,12 @@ func (c *Controller) processControlMessages() {
 }
 
 func (c *Controller) handleStopMessage() {
-	deadline, ok := c.enterShutdownFromMessage()
+	deadline, cause, ok := c.enterShutdownFromMessage()
 	if !ok {
 		return
 	}
 
-	c.logger.Warn("Stopping Services")
+	c.logger.Info("Stopping Services", "cause", cause)
 
 	// Detach OS-signal handling at shutdown so a late signal does not land on a
 	// channel no one is reading (D6).
@@ -619,21 +619,21 @@ func (c *Controller) handleStopMessage() {
 // enterShutdownFromMessage makes the transition for a Stop sent directly on
 // Messages(), and records CauseStop and a deadline if nothing has: that covers
 // the direct send and a consumer that SetState(Stopping) first, which no
-// transition saw (spec 0003 D7). It reports the deadline, and false when the
-// controller is not Stopping.
-func (c *Controller) enterShutdownFromMessage() (time.Time, bool) {
+// transition saw (spec 0003 D7). It reports the deadline and the recorded
+// cause, and false when the controller is not Stopping.
+func (c *Controller) enterShutdownFromMessage() (time.Time, StopCause, bool) {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
 	c.enterStoppingLocked()
 
 	if c.state != Stopping {
-		return time.Time{}, false
+		return time.Time{}, "", false
 	}
 
 	c.recordCause(trigger{cause: CauseStop})
 
-	return c.deadline, true
+	return c.deadline, c.outcome.Cause, true
 }
 
 // startAsyncHealthChecks launches background goroutines for health checks
