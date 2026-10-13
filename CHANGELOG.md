@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.8.3](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.3)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.2...v0.8.3)
+
+### Notes
+
+- Generational.Stop no longer reports ErrStopTimeout when the release finished by the time it reported, which it did
+  at random when the budget expired with a lease held and Release then returned quickly. It returns nil in that case.
+  ErrStopTimeout still means the release was not finished: a counter keyed on it now counts only those.
+
+### Bug Fixes
+
+- report a finished release as nil, not ErrStopTimeout ([10dd6da](https://gitlab.com/phpboyscout/go/controls/-/commit/10dd6da8d3c00d88b3f8f81e30140b9f21cfa8d0))
+
 ## [v0.8.2](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.2)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.1...v0.8.2)
