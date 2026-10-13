@@ -28,8 +28,8 @@ var (
 	ErrPredecessorLive = errors.NewSentinel("controls.predecessor_live", "controls: the previous generation still holds resources")
 
 	// ErrStopTimeout is returned by a Stop whose budget expired before the
-	// generation's resources were released. The generation remains un-released
-	// and a later Start is refused until it is: the error is semantic, not
+	// generation's resources were released. The release carries on, and a later
+	// Start waits for it within its own context: the error is semantic, not
 	// decoration.
 	ErrStopTimeout = errors.NewSentinel("controls.stop_timeout", "controls: stop budget expired before release completed")
 )
@@ -298,10 +298,23 @@ func (g *Generational[R]) Stop(ctx context.Context) error {
 
 	g.dispose(ctx, inst)
 
+	return releaseResult(ctx, inst.done)
+}
+
+// releaseResult reports whether the release finished within ctx. Past the
+// budget both cases can be ready, and a select would pick one at random, so a
+// finished release is checked for first.
+func releaseResult(ctx context.Context, done <-chan struct{}) error {
 	select {
-	case <-inst.done:
+	case <-done:
 		return nil
 	case <-ctx.Done():
+	}
+
+	select {
+	case <-done:
+		return nil
+	default:
 		return ErrStopTimeout
 	}
 }

@@ -101,8 +101,9 @@ generation whose `Probe` fails.
 4. Hands the generation to the disposer, which calls `Release` and retries until
    it returns `nil`.
 5. Returns `nil` when `Release` has succeeded, or `ErrStopTimeout` when `ctx`
-   expires first. On `ErrStopTimeout` the generation is still being released in
-   the background, and the next `Start` waits for that.
+   expires first. A release that has finished by the time `Stop` reports is
+   `nil`, even past the budget. On `ErrStopTimeout` the generation is still
+   being released in the background, and the next `Start` waits for that.
 
 `Stop` is idempotent. A second `Stop` finds no live generation and returns
 `nil` immediately, without waiting for the first call's release; a `Start` after
