@@ -32,8 +32,9 @@ any project can adopt it **without** pulling in the framework.
 
 - **Framework-free.** The only external dependency is
   [`go/errors`](https://gitlab.com/phpboyscout/go/errors), a sibling toolkit
-  module. No config framework, no TUI, no OpenTelemetry, no go-tool-base, and
-  `depfootprint_test.go` fails the build if any of them reaches the module graph.
+  module. No config framework, no TUI, no OpenTelemetry, no go-tool-base:
+  `depfootprint_test.go` fails the build if any module but `go/errors` reaches
+  the library's graph.
 - **Stdlib seams.** The only logging seam is a `*slog.Logger`; omit it and the
   controller logs to a discard handler. Everything else is functional options.
 - **Correct concurrency.** Idempotent `Start`/`Stop`; a restart policy that

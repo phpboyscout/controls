@@ -18,11 +18,11 @@ import "gitlab.com/phpboyscout/go/controls"
 
 ## The light-footprint promise
 
-The module graph is deliberately tiny. `go.mod` declares exactly one external
+The module graph is deliberately tiny. The library has exactly one external
 dependency, [`go/errors`](https://gitlab.com/phpboyscout/go/errors), a sibling
-module in the same toolkit. No config framework, no TUI, no OpenTelemetry, no
-go-tool-base, and `depfootprint_test.go` fails the build if any of them ever
-enters the graph.
+module in the same toolkit; the others in `go.mod` are for tests. No config
+framework, no TUI, no OpenTelemetry, no go-tool-base: `depfootprint_test.go`
+fails the build if any module but `go/errors` ever enters the library's graph.
 
 The only logging seam is the standard library's `*slog.Logger`, injected with
 `WithLogger`. Supply one or supply none: with none the controller logs to a

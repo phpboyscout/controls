@@ -29,9 +29,9 @@ startup**: services launch concurrently, there is no `DependsOn` and no readines
 barrier, only shutdown is ordered. Read [What controls does not
 do](https://controls.go.phpboyscout.uk/explanation/limitations/) before planning
 around a capability that turns out not to be there. Framework-free is enforced
-rather than aspirational: `depfootprint_test.go` fails the build if go-tool-base,
-cobra/viper/charm, OpenTelemetry or a cloud SDK reaches the graph, and the one
-external dependency is `go/errors`.
+rather than aspirational: `depfootprint_test.go` holds the library's graph to an
+allowlist of one external module, `go/errors`, and keeps go-tool-base and
+cobra/viper out of the test graph too.
 
 ## Who depends on it
 
