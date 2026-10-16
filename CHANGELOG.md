@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.8.5](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.5)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.4...v0.8.5)
+
+### Notes
+
+- A `slog.Handler` that panics while logging a `WithOnEvent` or
+  `WithOnPanic` callback panic no longer ends the process. The handler's
+  panic is discarded, and the callback goes on receiving later events.
+
+### Bug Fixes
+
+- keep a panicking log handler from crashing a callback-panic log ([5a0598e](https://gitlab.com/phpboyscout/go/controls/-/commit/5a0598eea6db420a9ad72cabd205002b821b6358))
+
 ## [v0.8.4](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.4)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.3...v0.8.4)
