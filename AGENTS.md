@@ -47,16 +47,17 @@ a release-train question.
 
 ## Where it has got to
 
-Pre-1.0 at `v0.7.1`. `Controller` is the settled part: its behaviour moved at
-`v0.2.0` (single-owner signal handling) and `v0.1.4` (a run of concurrency fixes,
-each with its own regression test file), and since then only in narrow fixes.
-Everything else is newer. `Supervisor` (spec 0002) landed in `v0.4.0`,
-`WithStopErr` and `Generational` in `v0.5.0`, the `singleuse` analyzer (the
-nested `lint/` module) in `v0.6.0`, and an exported `ErrRestartsExhausted` in
-`v0.7.0`. Keep that split in mind before treating any part of the surface as
-proven. Issues #15 to #19 came out of go-tool-base's review and interlock around
-a stop cause, so check them before changing how a controller stops or reports a
-failure. The docs are a full Diátaxis set at
+Pre-1.0; the latest tag is the current version, so read it from `git tag` rather
+than from here. `Controller` is the oldest part: its behaviour moved at `v0.1.4`
+(a run of concurrency fixes, each with its own regression test file), `v0.2.0`
+(single-owner signal handling) and `v0.8.0`, which added the stop cause,
+`WithOnEvent`, panic recovery and give-up (specs 0008 to 0010, from go-tool-base's
+review in issues #15 to #19). Read those specs before changing how a controller
+stops or reports a failure. Everything else is newer. `Supervisor` (spec 0002)
+landed in `v0.4.0`, `WithStopErr` and `Generational` in `v0.5.0`, the
+`singleuse` analyzer (the nested `lint/` module) in `v0.6.0`, and an exported
+`ErrRestartsExhausted` in `v0.7.0`. Keep that split in mind before treating any
+part of the surface as proven. The docs are a full Diátaxis set at
 [controls.go.phpboyscout.uk](https://controls.go.phpboyscout.uk).
 
 ## Traps
