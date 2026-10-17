@@ -1005,20 +1005,11 @@ func (c *Controller) startErrorsForwarder() {
 func (c *Controller) invokeOnEvent(ev ServiceEvent) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.logCallbackPanic("WithOnEvent callback panicked", "service_name", ev.Service, "kind", ev.Kind, "panic", r)
+			logCallbackPanic(c.logger, "WithOnEvent callback panicked", "service_name", ev.Service, "kind", ev.Kind, "panic", r)
 		}
 	}()
 
 	c.onEvent(ev)
-}
-
-// logCallbackPanic runs inside a deferred recover, so a handler that panics
-// here has nothing left to recover it and would end the process. Its panic is
-// discarded: the logger is what failed, and nothing else here can report it.
-func (c *Controller) logCallbackPanic(msg string, args ...any) {
-	defer func() { _ = recover() }()
-
-	c.logger.Error(msg, args...)
 }
 
 // invokeOnPanic recovers a panicking callback and logs it. It is never
@@ -1026,7 +1017,7 @@ func (c *Controller) logCallbackPanic(msg string, args ...any) {
 func (c *Controller) invokeOnPanic(r PanicReport) {
 	defer func() {
 		if p := recover(); p != nil {
-			c.logCallbackPanic("WithOnPanic callback panicked", "service_name", r.Service, "site", r.Site, "panic", p)
+			logCallbackPanic(c.logger, "WithOnPanic callback panicked", "service_name", r.Service, "site", r.Site, "panic", p)
 		}
 	}()
 

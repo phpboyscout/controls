@@ -27,7 +27,7 @@ func (h panickyHandler) Enabled(context.Context, slog.Level) bool {
 	// their caller. The panic count proves the name still matches.
 	if h.inEnabled {
 		stack := string(debug.Stack())
-		if strings.Contains(stack, "invokeOnEvent") || strings.Contains(stack, "invokeOnPanic") {
+		if strings.Contains(stack, "logCallbackPanic") {
 			h.panics.Add(1)
 			panic("handler: Enabled")
 		}

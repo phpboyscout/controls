@@ -3,6 +3,7 @@ package controls
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,7 @@ type Supervisor struct {
 	cancel  context.CancelFunc
 	stopped chan struct{}
 
+	logger      *slog.Logger
 	onFailure   func(Failure)
 	onPanic     func(PanicReport)
 	failuresFwd *failureForwarder
@@ -109,9 +111,10 @@ type SupervisorOption func(*Supervisor)
 // WithOnFailure registers a callback for a child that has exhausted its restart
 // policy.
 //
-// It runs on a dedicated dispatch goroutine, behind a recover, from an ordered
-// queue. That buys three things: a slow callback cannot stall supervision,
-// failures arrive in order, and none is lost while the callback is busy. The
+// It runs on a dedicated dispatch goroutine, from an ordered queue, behind a
+// recover that logs to [WithSupervisorLogger]. That buys three things: a slow
+// callback cannot stall supervision, failures arrive in order, and none is lost
+// while the callback is busy. The
 // queue is unbounded because a terminal failure is rare by construction — a
 // child reaches one only after exhausting its restart policy — and because a
 // callback is not opt-in the way [Supervisor.Failures] is, so shedding from it
@@ -132,9 +135,23 @@ func WithOnFailure(fn func(Failure)) SupervisorOption {
 // WithOnChildPanic registers a callback for every panic recovered in a child's
 // Start or Stop, from Start until Stop closes the queue. Like [WithOnFailure],
 // it runs on a goroutine Stop does not wait for, so it may call Stop; while it
-// is busy, repeats at one child and site merge into the latest with a count.
+// is busy, repeats at one child and site merge into the latest with a count. A
+// panic in fn is recovered and logged to [WithSupervisorLogger].
 func WithOnChildPanic(fn func(PanicReport)) SupervisorOption {
 	return func(s *Supervisor) { s.onPanic = fn }
+}
+
+// WithSupervisorLogger sets where a panic in a [WithOnFailure] or
+// [WithOnChildPanic] callback is logged, at error with its stack; the default,
+// and a nil l, discard. It is not inherited from a [Controller].
+func WithSupervisorLogger(l *slog.Logger) SupervisorOption {
+	return func(s *Supervisor) {
+		if l == nil {
+			l = slog.New(slog.DiscardHandler)
+		}
+
+		s.logger = l.With("component", "supervisor")
+	}
 }
 
 // NewSupervisor returns a supervisor with no children.
@@ -142,6 +159,7 @@ func NewSupervisor(opts ...SupervisorOption) *Supervisor {
 	s := &Supervisor{
 		children: map[string]*supervisedChild{},
 		stopped:  make(chan struct{}),
+		logger:   slog.New(slog.DiscardHandler),
 	}
 
 	for _, o := range opts {
@@ -624,7 +642,11 @@ func newFailureForwarder(deliver func(Failure)) *failureForwarder {
 // invoke calls the consumer's callback behind a recover, so a panic in it kills
 // neither the dispatch goroutine nor the process.
 func (s *Supervisor) invoke(f Failure) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if p := recover(); p != nil {
+			logCallbackPanic(s.logger, "WithOnFailure callback panicked", "child", f.Name, "restarts", f.Restarts, "panic", p)
+		}
+	}()
 
 	s.onFailure(f)
 }
@@ -664,9 +686,13 @@ func (s *Supervisor) reporter(c *supervisedChild, site PanicSite) panicReporter 
 	}
 }
 
-// invokeOnPanic discards a panic in the callback, as invoke does.
+// invokeOnPanic recovers a panic in the callback, as invoke does.
 func (s *Supervisor) invokeOnPanic(r PanicReport) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if p := recover(); p != nil {
+			logCallbackPanic(s.logger, "WithOnChildPanic callback panicked", "child", r.Service, "site", r.Site, "panic", p)
+		}
+	}()
 
 	s.onPanic(r)
 }

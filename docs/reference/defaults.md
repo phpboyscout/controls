@@ -60,6 +60,7 @@ time: 1s, 2s, 4s, 8s, 16s, 30s, 30s, … Because each run is far shorter than th
 
 | Setting | Default | Changed by | A zero or missing value means |
 |---|---|---|---|
+| Logger | `slog.New(slog.DiscardHandler)`, silent | `WithSupervisorLogger(l)` | Passing `nil` discards, unlike the controller's `WithLogger`. Not inherited from a `Controller`. |
 | `Failures()` channel | not created | calling `Failures()` | A consumer that never calls it never has a queue filling behind it. Created on first call, bounded at `DefaultFailureBufferSize` = **16**, and never closed. |
 | Failure callback queue | unbounded, ordered | `WithOnFailure(fn)` | Without the option no queue exists and no goroutine runs. |
 | Child panic callback queue | one report per child and site, the latest with a count | `WithOnChildPanic(fn)` | Without the option no queue exists and no goroutine runs. |
