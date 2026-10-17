@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.9.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.9.0)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.5...v0.9.0)
+
+### Notes
+
+- WithSupervisorLogger gives a Supervisor a logger. With it set, a panic in a WithOnFailure or WithOnChildPanic callback,
+  which the Supervisor recovers and discards, is also logged at error, naming the callback, the child, the panic value and
+  its stack. Without it nothing changes: the Supervisor logs nothing, as before. A Supervisor does not inherit a
+  Controller's logger; pass the same one to both, and the component attribute tells the lines apart.
+
+  The Controller's "WithOnEvent callback panicked" and "WithOnPanic callback panicked" lines gain a stack attribute.
+
+### Features
+
+- log a panic in a Supervisor's callbacks under WithSupervisorLogger ([5ebe189](https://gitlab.com/phpboyscout/go/controls/-/commit/5ebe1892d20efd99765749b3b108eff4f3058043))
+
 ## [v0.8.5](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.8.5)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.4...v0.8.5)
