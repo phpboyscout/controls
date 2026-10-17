@@ -36,11 +36,12 @@ would otherwise loop.
 func NewSupervisor(opts ...SupervisorOption) *Supervisor
 func WithOnFailure(fn func(Failure)) SupervisorOption
 func WithOnChildPanic(fn func(PanicReport)) SupervisorOption
+func WithSupervisorLogger(l *slog.Logger) SupervisorOption
 ```
 
 `WithOnFailure` registers a callback for a child that has exhausted its restart
 policy. It runs on a dedicated goroutine, from an **unbounded ordered queue**,
-behind a `recover`. So it cannot stall supervision, failures arrive in order,
+behind a `recover` that logs to `WithSupervisorLogger`. So it cannot stall supervision, failures arrive in order,
 and none is lost.
 
 The callback may call back into the supervisor, `Stop` included: nothing is held
@@ -52,7 +53,24 @@ returning does not mean every callback has finished.
 goroutine, never joined, so it may call `Stop`. It runs from `Start` until `Stop`
 closes the queue; a panic after that, such as in a stop that settles late, is not
 reported. While `fn` is busy, repeats at one child and site merge into the
-latest, with `Repeats` counting them. A panic in `fn` is discarded.
+latest, with `Repeats` counting them. A panic in `fn` is recovered, and logged
+under `WithSupervisorLogger`.
+
+`WithSupervisorLogger` gives the supervisor somewhere to say that one of those
+two callbacks panicked. It is the only thing the supervisor logs: each panic is
+one line at error, on the logger as `l.With("component", "supervisor")`.
+
+```
+level=ERROR msg="WithOnFailure callback panicked" component=supervisor child=worker-3 restarts=5 panic="..." stack="..."
+level=ERROR msg="WithOnChildPanic callback panicked" component=supervisor child=worker-3 site=start panic="..." stack="..."
+```
+
+`stack` is taken where the panic was recovered, so it names the line in your
+callback that panicked. Without the option, and with a `nil` logger, the panic
+is discarded and nothing is logged. A supervisor does not inherit a
+`Controller`'s logger: pass the same one to both, and `component` tells the lines
+apart. A handler that panics while writing the line cannot take the process
+down; its panic is discarded too (spec 0011).
 
 ## Methods
 

@@ -1,6 +1,10 @@
 package controls
 
 import (
+	"context"
+	"log/slog"
+	"runtime/debug"
+
 	"gitlab.com/phpboyscout/go/errors"
 )
 
@@ -109,4 +113,18 @@ func newPanicForwarder(consumer string, deliver func(PanicReport)) *panicForward
 			waiting.Repeats += 1 + next.Repeats
 		},
 	})
+}
+
+// logCallbackPanic logs a consumer callback's panic with its stack. It runs
+// inside a deferred recover, so a handler that panics here would end the
+// process; its panic is discarded, since the logger is what failed (spec 0011
+// D5).
+func logCallbackPanic(l *slog.Logger, msg string, args ...any) {
+	defer func() { _ = recover() }()
+
+	if !l.Enabled(context.Background(), slog.LevelError) {
+		return
+	}
+
+	l.Error(msg, append(args, "stack", string(debug.Stack()))...)
 }

@@ -65,6 +65,8 @@ goroutine that called it, and the panic becomes an error wrapping
 | `HealthCheck.Check` | recovered; reports unhealthy, `health check panicked: <value>` |
 | `Child.Start`, run by a `Supervisor` | recovered; counted, and fed to the restart policy |
 | `Child.Stop` | recovered |
+| `WithOnFailure` | recovered and discarded, so the next failure is still delivered; logged at error with its stack under `WithSupervisorLogger` |
+| `WithOnChildPanic` | recovered and discarded, so the next report is still delivered; logged at error with its stack under `WithSupervisorLogger` |
 
 Two things remain outside it. Go recovers a panic only on the goroutine that
 panicked, so a `StartFunc` that launches a server goroutine and returns has
@@ -169,7 +171,8 @@ retry in step.
 ## There are no metrics, traces or start events
 
 No counters, no OpenTelemetry, and no event for a start or a clean stop. The
-observable surface is the `*slog.Logger` you inject, failures through
+observable surface is the `*slog.Logger` you inject (and a `Supervisor`'s, under
+`WithSupervisorLogger`, which logs only its callbacks' panics), failures through
 `WithOnEvent` and the error channel, `GetState()`, `GetServiceInfo`,
 `Outcome()`, and the health reports.
 

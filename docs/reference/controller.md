@@ -47,7 +47,7 @@ apply one after construction that is safe once the controller is running; see
 | `WithLogger` | `WithLogger(l *slog.Logger)` | discard handler | Stores `l.With("component", "controller")`. Passing `nil` **panics with a nil pointer dereference inside `NewController`**. Omit the option instead if you want no logging. |
 | `WithShutdownTimeout` | `WithShutdownTimeout(d time.Duration)` | `DefaultShutdownTimeout` (5s) | Bounds the **whole** stop phase, not each callback. A zero or negative `d` is not "use the default": it produces an already-expired budget, so stop callbacks are abandoned the instant they are launched and may never run at all. |
 | `WithSignals` | `WithSignals()` | no signal handling | Creates a signal channel with a one-slot buffer. `signal.Notify` for `SIGINT`/`SIGTERM` is registered in `Start`, not at construction, and detached again at shutdown. Do not use it under a CLI framework that already turns signals into cancellation. |
-| `WithOnEvent` | `WithOnEvent(fn func(ServiceEvent))` | none | Delivers every terminal service failure, and the latest of each run of retries, to `fn` on a goroutine of its own, in order. A retry waiting behind a slow `fn` is replaced by a newer one. `fn` may call `Stop`. A panic in it is recovered and logged. See [Events](#service-events). |
+| `WithOnEvent` | `WithOnEvent(fn func(ServiceEvent))` | none | Delivers every terminal service failure, and the latest of each run of retries, to `fn` on a goroutine of its own, in order. A retry waiting behind a slow `fn` is replaced by a newer one. `fn` may call `Stop`. A panic in it is recovered and logged with its stack. See [Events](#service-events). |
 | `WithStopOnGiveUp` | `WithStopOnGiveUp()` | nothing a service does stops the controller | Stops it with `CauseGaveUp` when a registered service fails for good: an exhausted policy, a failed start with no policy, or a death after a clean start, which it watches for in a service with a `Status` and no policy. See [Stop when a service gives up](../how-to/stop-on-give-up.md). |
 | `WithDeathWatch` | `WithDeathWatch(interval time.Duration, threshold int)` | 10s, 3 | The death watch's poll interval and the consecutive failures that end a service. A zero or negative value keeps its default. Does nothing without `WithStopOnGiveUp`. |
 | `WithCompletion` | `WithCompletion(p CompletionPolicy)` | `CompleteOnFirst` | Which `WithRunToCompletion` service's completion ends the controller: the first, or under `CompleteOnAll` the last outstanding. An unknown value acts as `CompleteOnFirst`, with a warning at `Start`. |
@@ -185,8 +185,8 @@ type PanicReport struct {
 - **It is drained like the event callback**, within the remaining budget after
   the error channel and `WithOnEvent`, and what is left at the deadline is logged
   as undelivered with `consumer=WithOnPanic`.
-- A callback may call `Stop`. A panic in it is recovered and logged, never
-  reported.
+- A callback may call `Stop`. A panic in it is recovered and logged with its
+  stack, never reported.
 - Nothing orders a report against the event or log line for the same failure.
 
 ## The shutdown outcome

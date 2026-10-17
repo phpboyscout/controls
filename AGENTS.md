@@ -248,4 +248,7 @@ keeps failures ordered and means a callback calling back into the supervisor can
 includes `Stop` — an earlier version waited for the dispatch goroutine during shutdown, so a
 callback calling `Stop` waited for itself. The queue behind the callback is unbounded where the
 `Failures()` channel is bounded, because the channel is opt-in and the callback is not: a consumer
-that registered one did not agree to lose notifications.
+that registered one did not agree to lose notifications. A panic in the callback is recovered and
+logged to `WithSupervisorLogger`, through `logCallbackPanic` in `panic.go`, which the controller's
+callback-panic lines share: the line is written inside a deferred recover, so the helper carries its
+own, or a panicking `slog.Handler` would end the process (spec 0011 D5, issue 23).
