@@ -291,7 +291,7 @@ func TestAReaderThatStopsHoldsDoneForTheBudget(t *testing.T) {
 	}
 
 	c.Start()
-	<-errs
+	require.Error(t, <-errs)
 	awaitTrue(t, 2*time.Second, "every failure to be queued", func() bool {
 		total := 0
 		for i := range 5 {
