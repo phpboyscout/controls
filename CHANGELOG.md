@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.9.1](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.9.1)
+
+[Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.9.0...v0.9.1)
+
+### Bug Fixes
+
+- **deps**: update phpboyscout modules ([352b6d4](https://gitlab.com/phpboyscout/go/controls/-/commit/352b6d453962ea4bc15317ef8dca6ca2fb9ab31d))
+
 ## [v0.9.0](https://gitlab.com/phpboyscout/go/controls/-/releases/v0.9.0)
 
 [Compare to previous version](https://gitlab.com/phpboyscout/go/controls/-/compare/v0.8.5...v0.9.0)
