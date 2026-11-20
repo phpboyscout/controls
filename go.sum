@@ -1,6 +1,6 @@
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-gitlab.com/phpboyscout/go/errors v0.4.0 h1:mQaiajQfm9dY/piitHGyY3Ysx0aiL1Ilh/fpu98/ZyY=
-gitlab.com/phpboyscout/go/errors v0.4.0/go.mod h1:St46RqvDC8/YG8lh2Y01btBppK4nQZD/Ecr5faF5m0A=
+gitlab.com/phpboyscout/go/errors v0.4.1 h1:dIe0XMAkQlY1ICGhtbU+5ioJD5Wj5prkF+QP1nwuf0M=
+gitlab.com/phpboyscout/go/errors v0.4.1/go.mod h1:/8d5w6/fFkCJDVkxZTd8vmVuqzJTmMorsfBtRz1cz30=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
 go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
